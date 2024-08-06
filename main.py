@@ -13,6 +13,7 @@ from gensim import corpora
 from gensim.models import CoherenceModel
 from nltk import WordNetLemmatizer
 from pandas import DataFrame
+from sklearn.model_selection import train_test_split
 from stackapi import StackAPI
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -181,6 +182,14 @@ def visualize_lda_topics(corpus, id2word, lda_model, num_topics):
 
 
 def perform_supervised_modeling(questions):
+    questions_df = DataFrame(questions)
+
+    questions_without_tags = questions_df.drop(columns=['tags'], axis=1)
+    tags = questions_df['tags']
+
+    x_train, x_test, y_train, y_Test = train_test_split(questions_without_tags, tags, test_size=0.2,
+                                                        random_state=42)
+
     pass
 
 

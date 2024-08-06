@@ -162,7 +162,7 @@ cython_debug/
 #.idea/
 
 *plots*/
-results/
+*results/
 resources/
 *.docx#
 *.pdf
