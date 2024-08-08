@@ -5,18 +5,18 @@ import string
 import warnings
 from collections import defaultdict
 from datetime import datetime
-from pprint import pprint
-import seaborn as sns
-import matplotlib.patches as mpatches
 
+import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 import nltk
 import pandas as pd
+import seaborn as sns
 from nltk import WordNetLemmatizer
 from pandas import DataFrame
 from sklearn.feature_extraction.text import TfidfVectorizer
 from stackapi import StackAPI
 from wordcloud import WordCloud
+import gensim.parsing.preprocessing as gsp
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
@@ -31,6 +31,7 @@ SITE.max_pages = 25
 plt.style.use("fivethirtyeight")
 pd.set_option('display.max_rows', None)
 pd.set_option('display.max_columns', None)
+
 RESULTS_PATH = 'analysis_results'
 
 # NLTK PACKAGES
@@ -83,8 +84,13 @@ def extract_and_clean_text(question: dict):
     # Words with low information amount such as the, a, an, etc.
     words_without_stopwords = [i for i in tokenized_text if i not in stopwords]
 
+    words_without_tags = (gsp.strip_tags(word) for word in words_without_stopwords)
+    words_without_short_words = (gsp.strip_short(word) for word in words_without_tags)
+
+    print(list(words_without_short_words))
+
     # Keeping only the common part of verbs for example
-    words_lemmatized = (lemmatizer.lemmatize(w) for w in words_without_stopwords)
+    words_lemmatized = (lemmatizer.lemmatize(w) for w in words_without_short_words)
     cleaned_text = ' '.join(w for w in words_lemmatized if w in words or not w.isalpha())
     question['text'] = cleaned_text
 
@@ -97,12 +103,40 @@ def extract_and_clean_text(question: dict):
     return question
 
 
-def visualize_word_cloud(texts: list[str]):
-    joined_texts = ','.join(texts)
+def visualize_word_clouds(questions):
     wordcloud = WordCloud(background_color="white", max_words=5000, contour_width=3,
                           contour_color='steelblue')
+
+    texts = [question['text'] for question in questions]
+    joined_texts = ','.join(texts)
     cloud = wordcloud.generate(joined_texts)
-    cloud.to_file(f"{RESULTS_PATH}/wordcloud.png")
+    cloud.to_file(f"{RESULTS_PATH}/words_wordcloud.png")
+
+    unique_tags = set([tag for question in questions for tag in question['tags']])
+    print(f"{len(unique_tags)} unique tags were found in the dataset.\n")
+    joined_tags = ','.join(unique_tags)
+    cloud = wordcloud.generate(joined_tags)
+    cloud.to_file(f"{RESULTS_PATH}/tags_wordcloud.png")
+
+
+def display_most_used_tags(questions):
+    tags = defaultdict(int)
+
+    for question in questions:
+        for tag in question['tags']:
+            tags[tag] += 1
+
+    df: DataFrame = pd.DataFrame(list(tags.items()), columns=['tag', 'count'])
+    df.sort_values(by='count', ascending=False, inplace=True)
+    top_50_df = df.head(50)
+
+    fig, axs = plt.subplots(1, 1)
+    fig.set_size_inches(14, 14)
+
+    sns.barplot(x="count", y="tag", data=top_50_df, color='#f56900', ax=axs)
+    plt.title('Most used tags')
+
+    fig.savefig(f"{RESULTS_PATH}/most_used_tags.png", bbox_inches='tight')
 
 
 def display_number_of_words_per_tag(questions):
@@ -166,7 +200,7 @@ def display_length_of_body_and_title(questions):
 
 def perform_tf_idf_analysis(questions):
     all_texts = [question['text'] for question in questions]
-    tfidf = TfidfVectorizer()
+    tfidf = TfidfVectorizer(stop_words=stopwords, max_df=0.95, min_df=1)
     values = tfidf.fit_transform(all_texts)
     print(values)
 
@@ -174,7 +208,7 @@ def perform_tf_idf_analysis(questions):
 
 
 if __name__ == '__main__':
-    print("Starting project 5!\n")
+    print("Starting analysis script.\n")
     remove_last_generated_results()
 
     # cache_questions()
@@ -186,15 +220,7 @@ if __name__ == '__main__':
         "tags": question['tags'],
         "title": question['title']
     } for question in json_questions]
-
-    """Un notebook d’exploration et de pré-traitement des questions comprenant 
-    une analyse univariée et multivariée, 
-    un nettoyage des questions, 
-    un feature engineering de type bag of words avec réduction de dimension (du vocabulaire et des tags) """
-
     print(f"{len(questions)} questions loaded from cache.\n")
-
-    df: DataFrame = DataFrame(questions)
 
     # Lot of false positives with the technical language, you could do it in the final dataset if enough rows remain
     # non_english_questions = [question for question in questions
@@ -204,11 +230,12 @@ if __name__ == '__main__':
 
     questions = list(map(extract_and_clean_text, questions))
 
-    # display_length_of_body_and_title(questions)
+    display_length_of_body_and_title(questions)
 
-    # display_number_of_words_per_tag(questions)
+    display_most_used_tags(questions)
 
-    # visualize_word_cloud([question['text'] for question in questions])
-    
+    display_number_of_words_per_tag(questions)
+
+    visualize_word_clouds(questions)
+
     perform_tf_idf_analysis(questions)
-
