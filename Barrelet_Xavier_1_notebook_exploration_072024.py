@@ -87,8 +87,6 @@ def extract_and_clean_text(question: dict):
     words_without_tags = (gsp.strip_tags(word) for word in words_without_stopwords)
     words_without_short_words = (gsp.strip_short(word) for word in words_without_tags)
 
-    print(list(words_without_short_words))
-
     # Keeping only the common part of verbs for example
     words_lemmatized = (lemmatizer.lemmatize(w) for w in words_without_short_words)
     cleaned_text = ' '.join(w for w in words_lemmatized if w in words or not w.isalpha())
