@@ -15,6 +15,7 @@ from nltk import WordNetLemmatizer
 from pandas import DataFrame
 from sklearn import metrics
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import make_scorer
 from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.multioutput import MultiOutputClassifier
 from sklearn.preprocessing import MultiLabelBinarizer
@@ -39,6 +40,9 @@ RESULTS_PATH = 'supervised_results'
 stopwords = nltk.corpus.stopwords.words('english')
 words = set(nltk.corpus.words.words())
 lemmatizer = WordNetLemmatizer()
+
+# To avoid having multiprocessing issues between BERT and the GridsearchCV
+os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 
 
 def load_cached_questions():
@@ -72,8 +76,8 @@ def extract_and_clean_text(question: dict):
 
     # Keeping only the common part of verbs for example
     words_lemmatized = (lemmatizer.lemmatize(w) for w in words_without_whitespaces)
-    cleaned_text = [w for w in words_lemmatized if w in words or not w.isalpha()]
-    # cleaned_text = ' '.join(w for w in words_lemmatized if w in words or not w.isalpha())
+    # cleaned_text = [w for w in words_lemmatized if w in words or not w.isalpha()]
+    cleaned_text = ' '.join(w for w in words_lemmatized if w in words or not w.isalpha())
     question['text'] = cleaned_text
 
     bigrams = nltk.bigrams(tokenized_text)
@@ -153,7 +157,6 @@ def feature_BERT_fct(model, model_type, sentences, max_length, b_size, mode='HF'
 
 
 def feature_USE_fct(sentences, b_size):
-    sentences = [" ".join(sentence) for sentence in sentences]
     batch_size = b_size
     time1 = time.time()
     us_encoder = hub.load("https://tfhub.dev/google/universal-sentence-encoder/4")
@@ -192,7 +195,7 @@ def transform_text(questions_without_tags, text_transformation_method):
 
 
 def perform_supervised_modeling(questions):
-    questions_df = DataFrame(questions)[['text', 'tags']]
+    questions_df = DataFrame(questions)[['text', 'tags']].head(100)
 
     tags = MultiLabelBinarizer().fit_transform(questions_df['tags'])
 
@@ -200,95 +203,102 @@ def perform_supervised_modeling(questions):
 
     for text_transformation_method in [
         # "Word2VEC",
-        # "BERT",
-        "USE"
+        "BERT",
+        # "USE"
     ]:
         transformed_text = transform_text(questions_without_tags['text'], text_transformation_method)
         print(f"Before transformation:{len(questions_without_tags['text'])}, "
               f"after transformation:{len(transformed_text)}\n")
 
+        print(f"Starting supervised learning with words embedding method:{text_transformation_method}.\n")
+
         x_train, x_test, y_train, y_test = train_test_split(transformed_text, tags, test_size=0.2, random_state=42)
         print(f"training set size:{len(x_train)}, test set size:{len(x_test)}\n")
-
-        rf_hyperparameters = {'estimator__max_depth': range(2, 8), 'estimator__max_features': range(2, 10)}
 
         # https://pub.towardsai.net/understanding-multi-label-classification-model-and-accuracy-metrics-1b2a8e2648ca
         # https://pub.towardsai.net/multi-label-text-classification-using-scikit-multilearn-case-study-with-stackoverflow-questions-768cb487ad12
 
         # Binary Relevance Scheme
         # You basically train a classifier for each tag with as prediction 0 or 1 for each given tag.
-
+        #
         # Classifier Chain Scheme
         # Same as binary but the predictions of the previous classifiers are an extra feature for the next one.
-
+        #
         # Hamming Loss
         # Instead of counting no of correctly classified data instance, Hamming Loss calculates loss generated in the bit
         # string of class labels during prediction. It does XOR operation between the original binary string of class
         # labels and predicted class labels for a data instance and calculates the average across the dataset.
-
+        #
         # Subset Accuracy
         # There are some situations where we may go for an absolute accuracy ratio where measuring the exact combination
         # of label predictions is important.
 
-        # pprint(features_bert)
-
         print("Using MultiOutputClassifier now:\n")
-        classifier_model = MultiOutputClassifier(estimator=RandomForestClassifier(n_estimators=300))
+        rf_hyperparameters = {'estimator__max_depth': [5], 'estimator__max_features': [6]}
+        # rf_hyperparameters = {'estimator__max_depth': range(2, 8), 'estimator__max_features': range(2, 10)}
+        classifier_model = MultiOutputClassifier(estimator=RandomForestClassifier(n_estimators=100))
         grid_search_cv = GridSearchCV(classifier_model,
                                       rf_hyperparameters,
                                       cv=2,
-                                      # scoring='neg_root_mean_squared_error',
+                                      scoring=make_scorer(metrics.hamming_loss, greater_is_better=False),
                                       n_jobs=-1,
-                                      # return_train_score=True
+                                      return_train_score=True,
+                                      verbose=3
                                       )
         grid_search_cv.fit(x_train, y_train)
 
         best_parameters = grid_search_cv.best_params_
         print(f"Best mean squared score:{grid_search_cv.best_score_} with params:{best_parameters}")
 
-        predictions_test_y = grid_search_cv.best_estimator_._final_estimator.predict(x_test)
+        predictions_test_y = grid_search_cv.best_estimator_.predict(x_test)
         hamming_loss = metrics.hamming_loss(y_true=y_test, y_pred=predictions_test_y)
         print(f"Hamming loss:{hamming_loss}\n")
 
         print("Using BinaryRelevance now:\n")
-        classifier_model = BinaryRelevance(RandomForestClassifier(n_estimators=300))
+        rf_hyperparameters = {'classifier__max_depth': [5], 'classifier__max_features': [6]}
+        # rf_hyperparameters = {'classifier__max_depth': range(2, 8), 'classifier__max_features': range(2, 10)}
+        classifier_model = BinaryRelevance(classifier=RandomForestClassifier(n_estimators=100))
         grid_search_cv = GridSearchCV(classifier_model,
                                       rf_hyperparameters,
                                       cv=2,
-                                      # scoring='neg_root_mean_squared_error',
+                                      # scoring=make_scorer(metrics.hamming_loss, greater_is_better=False),
                                       n_jobs=-1,
-                                      # return_train_score=True
+                                      return_train_score=True,
+                                      verbose=3
                                       )
         grid_search_cv.fit(x_train, y_train)
 
         best_parameters = grid_search_cv.best_params_
         print(f"Best mean squared score:{grid_search_cv.best_score_} with params:{best_parameters}")
 
-        predictions_test_y = grid_search_cv.best_estimator_._final_estimator.predict(x_test)
+        predictions_test_y = grid_search_cv.best_estimator_.predict(x_test)
         hamming_loss = metrics.hamming_loss(y_true=y_test, y_pred=predictions_test_y)
         print(f"Hamming loss:{hamming_loss}\n")
 
         print("Using ClassifierChain now:\n")
-        classifier_model = ClassifierChain(RandomForestClassifier(n_estimators=300))
+        rf_hyperparameters = {'classifier__max_depth': [5], 'classifier__max_features': [6]}
+        # rf_hyperparameters = {'classifier__max_depth': range(2, 8), 'classifier__max_features': range(2, 10)}
+        classifier_model = ClassifierChain(classifier=RandomForestClassifier(n_estimators=100))
         grid_search_cv = GridSearchCV(classifier_model,
                                       rf_hyperparameters,
                                       cv=2,
-                                      # scoring='neg_root_mean_squared_error',
+                                      # scoring=make_scorer(metrics.hamming_loss, greater_is_better=False),
                                       n_jobs=-1,
-                                      # return_train_score=True
+                                      return_train_score=True,
+                                      verbose=3
                                       )
         grid_search_cv.fit(x_train, y_train)
 
         best_parameters = grid_search_cv.best_params_
         print(f"Best mean squared score:{grid_search_cv.best_score_} with params:{best_parameters}")
 
-        predictions_test_y = grid_search_cv.best_estimator_._final_estimator.predict(x_test)
+        predictions_test_y = grid_search_cv.best_estimator_.predict(x_test)
         hamming_loss = metrics.hamming_loss(y_true=y_test, y_pred=predictions_test_y)
         print(f"Hamming loss:{hamming_loss}\n")
 
 
 if __name__ == '__main__':
-    print("Starting unsupervised learning script.\n")
+    print("Starting supervised learning script.\n")
     remove_last_generated_results()
 
     json_questions = load_cached_questions()
@@ -304,5 +314,7 @@ if __name__ == '__main__':
     questions = list(map(extract_and_clean_text, questions))
 
     perform_supervised_modeling(questions)
+
+    print("\nSupervised learning now finished.\n")
 
     # https://mlflow.org/docs/latest/getting-started/intro-quickstart/index.html
