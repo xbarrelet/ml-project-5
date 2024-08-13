@@ -8,12 +8,14 @@ from pprint import pprint
 
 import gensim.parsing.preprocessing as gsp
 import matplotlib.pyplot as plt
+import mlflow
 import nltk
 import numpy as np
 import pandas as pd
 import tensorflow_hub as hub
 from gensim.models.doc2vec import TaggedDocument, Doc2Vec
-from nltk import WordNetLemmatizer
+from mlflow.models import infer_signature
+from nltk import WordNetLemmatizer, PorterStemmer
 from pandas import DataFrame
 from sklearn import metrics
 from sklearn.ensemble import RandomForestClassifier
@@ -23,6 +25,7 @@ from sklearn.multioutput import MultiOutputClassifier
 from sklearn.preprocessing import MultiLabelBinarizer
 from skmultilearn.problem_transform import BinaryRelevance, ClassifierChain
 from transformers import *
+from xgboost import XGBClassifier
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
@@ -31,6 +34,8 @@ plt.style.use("fivethirtyeight")
 pd.set_option('display.max_rows', None)
 pd.set_option('display.max_columns', None)
 
+# PATHS
+CACHED_QUESTIONS_FILE = 'cached_questions_2500.json'
 RESULTS_PATH = 'supervised_results'
 
 # NLTK PACKAGES
@@ -39,19 +44,24 @@ RESULTS_PATH = 'supervised_results'
 # nltk.download('words')
 # nltk.download('wordnet')
 
+# NLTK OBJECTS
 stopwords = nltk.corpus.stopwords.words('english')
 words = set(nltk.corpus.words.words())
 lemmatizer = WordNetLemmatizer()
+stemmer = PorterStemmer()
 
 # To avoid having multiprocessing issues between BERT and the GridsearchCV
 os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 
+# MLFlow
+mlflow.set_tracking_uri(uri="http://localhost:8080")
+mlflow.set_experiment("Supervised Learning Experiment")
+
 
 def load_cached_questions():
     """Load questions from the cache file."""
-    with open('cached_questions_BAK.json', 'r', encoding='utf-8') as f:
-        json_data = json.load(f)
-        return json_data['items']
+    with open(CACHED_QUESTIONS_FILE, 'r', encoding='utf-8') as f:
+        return json.load(f)
 
 
 def remove_last_generated_results():
@@ -76,22 +86,20 @@ def extract_and_clean_text(question: dict):
     words_without_short_words = (gsp.strip_short(word) for word in words_without_tags)
     words_without_whitespaces = (gsp.strip_multiple_whitespaces(word) for word in words_without_short_words)
 
-    # Keeping only the common part of verbs for example
+    # words_stemmed = (stemmer.stem(w) for w in words_without_short_words)
     words_lemmatized = (lemmatizer.lemmatize(w) for w in words_without_whitespaces)
-    # cleaned_text = [w for w in words_lemmatized if w in words or not w.isalpha()]
     cleaned_text = ' '.join(w for w in words_lemmatized if w in words or not w.isalpha())
     question['text'] = cleaned_text
 
-    bigrams = nltk.bigrams(tokenized_text)
-    question['bigrams'] = [' '.join(bigram) for bigram in bigrams]
+    # bigrams = nltk.bigrams(tokenized_text)
+    # question['bigrams'] = [' '.join(bigram) for bigram in bigrams]
 
-    trigrams = nltk.trigrams(tokenized_text)
-    question['trigrams'] = [' '.join(trigram) for trigram in trigrams]
+    # trigrams = nltk.trigrams(tokenized_text)
+    # question['trigrams'] = [' '.join(trigram) for trigram in trigrams]
 
     return question
 
 
-# Fonction de préparation des sentences
 def bert_inp_fct(sentences, bert_tokenizer, max_length):
     input_ids = []
     token_type_ids = []
@@ -122,7 +130,6 @@ def bert_inp_fct(sentences, bert_tokenizer, max_length):
     return input_ids, token_type_ids, attention_mask, bert_inp_tot
 
 
-# Fonction de création des features
 def feature_BERT_fct(model, model_type, sentences, max_length, b_size, mode='HF'):
     batch_size = b_size
     batch_size_pred = b_size
@@ -155,7 +162,7 @@ def feature_BERT_fct(model, model_type, sentences, max_length, b_size, mode='HF'
     time2 = np.round(time.time() - time1, 0)
     print(f"BERT processing time:{time2}s\n")
 
-    return features_bert, last_hidden_states_tot
+    return features_bert
 
 
 def feature_USE_fct(sentences, b_size):
@@ -181,17 +188,7 @@ def transform_text(questions_without_tags, text_transformation_method):
     # TODO: You could add a Doc2Vec avec dm=1 et Word2Vec for comparison
 
     if text_transformation_method == "Doc2VEC":
-        tagged_text = [TaggedDocument(words=text, tags=[str(index)])
-                       for index, text in enumerate(questions_without_tags)]
-
-        # dm=0 for DBOW, dm=1 for PV-DM
-        model = Doc2Vec(vector_size=30, min_count=2, epochs=80, dm=0)
-        model.build_vocab(tagged_text)
-        model.train(tagged_text, total_examples=model.corpus_count, epochs=model.epochs)
-        # model.save("d2v.model")
-        embedded_text = [model.infer_vector(text.split(" ")) for text in questions_without_tags]
-
-        return embedded_text
+        return feature_Doc2VEC_fct(questions_without_tags)
 
     elif text_transformation_method == "BERT":
         max_length = 64
@@ -199,121 +196,95 @@ def transform_text(questions_without_tags, text_transformation_method):
         model_type = 'bert-base-uncased'
         model = TFAutoModel.from_pretrained(model_type)
 
-        features_bert, last_hidden_states_tot = feature_BERT_fct(model, model_type, questions_without_tags,
-                                                                 max_length, batch_size)
-        return features_bert
+        return feature_BERT_fct(model, model_type, questions_without_tags, max_length, batch_size)
 
     elif text_transformation_method == "USE":
         batch_size = 10
         return feature_USE_fct(questions_without_tags, batch_size)
 
 
+def feature_Doc2VEC_fct(questions_without_tags):
+    time1 = time.time()
+    tagged_text = [TaggedDocument(words=text, tags=[str(index)])
+                   for index, text in enumerate(questions_without_tags)]
+
+    # dm=0 for DBOW, dm=1 for PV-DM
+    model = Doc2Vec(vector_size=30, min_count=2, epochs=80, dm=0)
+    model.build_vocab(tagged_text)
+    model.train(tagged_text, total_examples=model.corpus_count, epochs=model.epochs)
+
+    # model.save("d2v.model")
+    embedded_text = [model.infer_vector(text.split(" ")) for text in questions_without_tags]
+
+    time2 = np.round(time.time() - time1, 0)
+    print(f"Doc2VEC processing time:{time2}s\n")
+    return embedded_text
+
+
 def perform_supervised_modeling(questions):
-    questions_df = DataFrame(questions)[['text', 'tags']].head(100)
+    questions_df = DataFrame(questions)[['text', 'tags']]
 
     tags = MultiLabelBinarizer().fit_transform(questions_df['tags'])
-
     questions_without_tags = questions_df.drop(columns=['tags'], axis=1)
 
     results = []
-    for text_transformation_method in [
+    for words_embedding_method in [
         "Doc2VEC",
         "BERT",
         "USE"
     ]:
-        transformed_text = transform_text(questions_without_tags['text'], text_transformation_method)
-        print(f"Before transformation:{len(questions_without_tags['text'])}, "
-              f"after transformation:{len(transformed_text)}\n")
-
-        print(f"Starting supervised learning with words embedding method:{text_transformation_method}.\n")
+        print(f"Starting supervised learning with words embedding method:{words_embedding_method}.\n")
+        transformed_text = transform_text(questions_without_tags['text'], words_embedding_method)
 
         x_train, x_test, y_train, y_test = train_test_split(transformed_text, tags, test_size=0.2, random_state=42)
         print(f"training set size:{len(x_train)}, test set size:{len(x_test)}\n")
 
-        # https://pub.towardsai.net/understanding-multi-label-classification-model-and-accuracy-metrics-1b2a8e2648ca
-        # https://pub.towardsai.net/multi-label-text-classification-using-scikit-multilearn-case-study-with-stackoverflow-questions-768cb487ad12
-
-        # Binary Relevance Scheme
-        # You basically train a classifier for each tag with as prediction 0 or 1 for each given tag.
-        #
-        # Classifier Chain Scheme
-        # Same as binary but the predictions of the previous classifiers are an extra feature for the next one.
-        #
-        # Hamming Loss
-        # Instead of counting no of correctly classified data instance, Hamming Loss calculates loss generated in the bit
-        # string of class labels during prediction. It does XOR operation between the original binary string of class
-        # labels and predicted class labels for a data instance and calculates the average across the dataset.
-        #
-        # TODO: Also use Jaccard score
+        # http://scikit.ml/modelselection.html
 
         result = {}
-        print("Using MultiOutputClassifier now:\n")
-        rf_hyperparameters = {'estimator__max_depth': [5], 'estimator__max_features': [6]}
-        # rf_hyperparameters = {'estimator__max_depth': range(2, 8), 'estimator__max_features': range(2, 10)}
-        classifier_model = MultiOutputClassifier(estimator=RandomForestClassifier(n_estimators=100))
-        grid_search_cv = GridSearchCV(classifier_model,
-                                      rf_hyperparameters,
+        default_model = XGBClassifier(n_estimators=100)
+        default_hyperparameters = {'estimator__max_depth': range(2, 12), 'estimator__n_estimators': range(50, 151, 50)}
+
+        grid_search_cv = GridSearchCV(MultiOutputClassifier(estimator=default_model), default_hyperparameters,
                                       cv=2,
                                       scoring=make_scorer(metrics.hamming_loss, greater_is_better=False),
                                       n_jobs=-1,
-                                      return_train_score=True,
+                                      # return_train_score=True,
                                       verbose=3
                                       )
         grid_search_cv.fit(x_train, y_train)
 
         best_parameters = grid_search_cv.best_params_
-        print(f"Best mean squared score:{grid_search_cv.best_score_} with params:{best_parameters}")
+        print(f"\nBest mean squared score:{grid_search_cv.best_score_} with params:{best_parameters}")
 
         predictions_test_y = grid_search_cv.best_estimator_.predict(x_test)
+
         hamming_loss = metrics.hamming_loss(y_true=y_test, y_pred=predictions_test_y)
-        print(f"Hamming loss:{hamming_loss}\n")
-        result['MultiOutputClassifier'] = hamming_loss
+        jaccard_score = metrics.jaccard_score(y_true=y_test, y_pred=predictions_test_y, average='samples')
+        print(f"Hamming loss:{hamming_loss}, jaccard_score:{jaccard_score}\n")
 
-        print("Using BinaryRelevance now:\n")
-        rf_hyperparameters = {'classifier__max_depth': [5], 'classifier__max_features': [6]}
-        # rf_hyperparameters = {'classifier__max_depth': range(2, 8), 'classifier__max_features': range(2, 10)}
-        classifier_model = BinaryRelevance(classifier=RandomForestClassifier(n_estimators=100))
-        grid_search_cv = GridSearchCV(classifier_model,
-                                      rf_hyperparameters,
-                                      cv=2,
-                                      scoring=make_scorer(metrics.hamming_loss, greater_is_better=False),
-                                      n_jobs=-1,
-                                      return_train_score=True,
-                                      verbose=3
-                                      )
-        grid_search_cv.fit(x_train, y_train)
+        result[words_embedding_method] = {
+            "hamming_loss": hamming_loss,
+            "jaccard_score": jaccard_score
+        }
 
-        best_parameters = grid_search_cv.best_params_
-        print(f"Best mean squared score:{grid_search_cv.best_score_} with params:{best_parameters}")
+        with mlflow.start_run():
+            mlflow.log_params(default_hyperparameters)
 
-        predictions_test_y = grid_search_cv.best_estimator_.predict(x_test)
-        hamming_loss = metrics.hamming_loss(y_true=y_test, y_pred=predictions_test_y)
-        print(f"Hamming loss:{hamming_loss}\n")
-        result['BinaryRelevance'] = hamming_loss
+            mlflow.log_metric("hamming_loss", hamming_loss)
+            mlflow.log_metric("jaccard_score", jaccard_score)
 
-        print("Using ClassifierChain now:\n")
-        rf_hyperparameters = {'classifier__max_depth': [5], 'classifier__max_features': [6]}
-        # rf_hyperparameters = {'classifier__max_depth': range(2, 8), 'classifier__max_features': range(2, 10)}
-        classifier_model = ClassifierChain(classifier=RandomForestClassifier(n_estimators=100))
-        grid_search_cv = GridSearchCV(classifier_model,
-                                      rf_hyperparameters,
-                                      cv=2,
-                                      # scoring=make_scorer(metrics.hamming_loss, greater_is_better=False),
-                                      n_jobs=-1,
-                                      return_train_score=True,
-                                      verbose=3
-                                      )
-        grid_search_cv.fit(x_train, y_train)
+            mlflow.set_tag("Words embedding method", words_embedding_method)
 
-        best_parameters = grid_search_cv.best_params_
-        print(f"Best mean squared score:{grid_search_cv.best_score_} with params:{best_parameters}")
+            signature = infer_signature(x_train, grid_search_cv.best_estimator_.predict(x_train))
 
-        predictions_test_y = grid_search_cv.best_estimator_.predict(x_test)
-        hamming_loss = metrics.hamming_loss(y_true=y_test, y_pred=predictions_test_y)
-        print(f"Hamming loss:{hamming_loss}\n")
-        result['ClassifierChain'] = hamming_loss
-
-        results.append(result)
+            mlflow.sklearn.log_model(
+                sk_model=grid_search_cv.best_estimator_,
+                artifact_path="supervised-models",
+                signature=signature,
+                input_example=x_train,
+                registered_model_name="XGBoost",
+            )
 
     print("Results:\n")
     pprint(results)
@@ -334,6 +305,7 @@ if __name__ == '__main__':
     print(f"{len(questions)} questions loaded from cache.\n")
 
     questions = list(map(extract_and_clean_text, questions))
+    print("Texts extracted and cleaned.\n")
 
     perform_supervised_modeling(questions)
 

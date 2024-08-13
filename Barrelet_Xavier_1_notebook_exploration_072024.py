@@ -148,6 +148,7 @@ def display_most_used_tags(questions):
     plt.title('Most used tags')
 
     fig.savefig(f"{RESULTS_PATH}/most_used_tags.png", bbox_inches='tight')
+    plt.close()
 
 
 def get_most_used_tags(questions, count):
@@ -198,6 +199,7 @@ def generate_plot_with_words_per_tag(top_50_df):
     fig.legend(handles=[total_bar, unique_words_bar])
 
     fig.savefig(f"{RESULTS_PATH}/words_per_tag.png", bbox_inches='tight')
+    plt.close()
 
 
 def display_length_of_body_and_title(questions):
@@ -220,10 +222,12 @@ def display_length_of_body_and_title(questions):
 
     boxplot = sns.boxplot(df, x="body_length")
     boxplot.get_figure().savefig(f"{RESULTS_PATH}/length_of_body_boxplot.png", bbox_inches='tight')
+    plt.close()
 
     boxplot_without_outliers = sns.boxplot(df, x="body_length", showfliers=False)
     boxplot_without_outliers.get_figure().savefig(f"{RESULTS_PATH}/length_of_body_boxplot_without_outliers.png",
                                                   bbox_inches='tight')
+    plt.close()
 
 
 def visualize_dimensionality_reductions(questions):
@@ -299,13 +303,21 @@ if __name__ == '__main__':
     # non_english_questions = [question for question in questions if langdetect.detect(question['body']) != 'en']
 
     cleaned_questions = list(map(extract_and_clean_text, questions))
+    print(f"Texts extracted and cleaned.\n")
 
     display_length_of_body_and_title(cleaned_questions)
+    print("Length of body and title displayed.\n")
 
     display_most_used_tags(cleaned_questions)
+    print("Most used tags displayed.\n")
 
     display_number_of_words_per_tag(cleaned_questions)
+    print("Number of words per tag displayed.\n")
 
     visualize_word_clouds(cleaned_questions)
+    print("Word clouds displayed.\n")
 
     visualize_dimensionality_reductions(cleaned_questions)
+    print("Dimensionality reductions displayed.\n")
+
+    print("Analysis script finished.\n")

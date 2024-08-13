@@ -118,13 +118,15 @@ def train_lda_model(questions):
                                            alpha=best_hyperparameters['alpha'],
                                            eta=best_hyperparameters['eta'])
 
+    print("Visualizing the topics of the LDA model.\n")
     visualize_lda_topics(corpus, id2word, lda_model, best_hyperparameters['num_topics'])
 
+    print("Saving the LDA model.\n")
     save_model(best_hyperparameters, lda_model)
 
 
 def save_model(best_hyperparameters, lda_model):
-    os.makedirs('models/lda', exist_ok=True)
+    os.makedirs('models/unsupervised', exist_ok=True)
     lda_model.save(f"models/lda/lda_model_with_{best_hyperparameters['num_topics']}_topics.model")
 
 
@@ -185,5 +187,5 @@ if __name__ == '__main__':
     print("Texts extracted and cleaned.\n")
 
     train_lda_model(questions)
-    
+
     print("\nUnsupervised learning script finished.")
