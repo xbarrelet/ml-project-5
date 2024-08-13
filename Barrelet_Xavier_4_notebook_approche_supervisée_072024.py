@@ -4,6 +4,7 @@ import shutil
 import string
 import time
 import warnings
+from pprint import pprint
 
 import gensim.parsing.preprocessing as gsp
 import matplotlib.pyplot as plt
@@ -11,6 +12,7 @@ import nltk
 import numpy as np
 import pandas as pd
 import tensorflow_hub as hub
+from gensim.models.doc2vec import TaggedDocument, Doc2Vec
 from nltk import WordNetLemmatizer
 from pandas import DataFrame
 from sklearn import metrics
@@ -47,7 +49,7 @@ os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 
 def load_cached_questions():
     """Load questions from the cache file."""
-    with open('cached_questions.json', 'r', encoding='utf-8') as f:
+    with open('cached_questions_BAK.json', 'r', encoding='utf-8') as f:
         json_data = json.load(f)
         return json_data['items']
 
@@ -176,8 +178,20 @@ def feature_USE_fct(sentences, b_size):
 
 
 def transform_text(questions_without_tags, text_transformation_method):
-    if text_transformation_method == "Word2VEC":
-        return questions_without_tags['text']
+    # TODO: You could add a Doc2Vec avec dm=1 et Word2Vec for comparison
+
+    if text_transformation_method == "Doc2VEC":
+        tagged_text = [TaggedDocument(words=text, tags=[str(index)])
+                       for index, text in enumerate(questions_without_tags)]
+
+        # dm=0 for DBOW, dm=1 for PV-DM
+        model = Doc2Vec(vector_size=30, min_count=2, epochs=80, dm=0)
+        model.build_vocab(tagged_text)
+        model.train(tagged_text, total_examples=model.corpus_count, epochs=model.epochs)
+        # model.save("d2v.model")
+        embedded_text = [model.infer_vector(text.split(" ")) for text in questions_without_tags]
+
+        return embedded_text
 
     elif text_transformation_method == "BERT":
         max_length = 64
@@ -201,10 +215,11 @@ def perform_supervised_modeling(questions):
 
     questions_without_tags = questions_df.drop(columns=['tags'], axis=1)
 
+    results = []
     for text_transformation_method in [
-        # "Word2VEC",
+        "Doc2VEC",
         "BERT",
-        # "USE"
+        "USE"
     ]:
         transformed_text = transform_text(questions_without_tags['text'], text_transformation_method)
         print(f"Before transformation:{len(questions_without_tags['text'])}, "
@@ -229,10 +244,9 @@ def perform_supervised_modeling(questions):
         # string of class labels during prediction. It does XOR operation between the original binary string of class
         # labels and predicted class labels for a data instance and calculates the average across the dataset.
         #
-        # Subset Accuracy
-        # There are some situations where we may go for an absolute accuracy ratio where measuring the exact combination
-        # of label predictions is important.
+        # TODO: Also use Jaccard score
 
+        result = {}
         print("Using MultiOutputClassifier now:\n")
         rf_hyperparameters = {'estimator__max_depth': [5], 'estimator__max_features': [6]}
         # rf_hyperparameters = {'estimator__max_depth': range(2, 8), 'estimator__max_features': range(2, 10)}
@@ -253,6 +267,7 @@ def perform_supervised_modeling(questions):
         predictions_test_y = grid_search_cv.best_estimator_.predict(x_test)
         hamming_loss = metrics.hamming_loss(y_true=y_test, y_pred=predictions_test_y)
         print(f"Hamming loss:{hamming_loss}\n")
+        result['MultiOutputClassifier'] = hamming_loss
 
         print("Using BinaryRelevance now:\n")
         rf_hyperparameters = {'classifier__max_depth': [5], 'classifier__max_features': [6]}
@@ -261,7 +276,7 @@ def perform_supervised_modeling(questions):
         grid_search_cv = GridSearchCV(classifier_model,
                                       rf_hyperparameters,
                                       cv=2,
-                                      # scoring=make_scorer(metrics.hamming_loss, greater_is_better=False),
+                                      scoring=make_scorer(metrics.hamming_loss, greater_is_better=False),
                                       n_jobs=-1,
                                       return_train_score=True,
                                       verbose=3
@@ -274,6 +289,7 @@ def perform_supervised_modeling(questions):
         predictions_test_y = grid_search_cv.best_estimator_.predict(x_test)
         hamming_loss = metrics.hamming_loss(y_true=y_test, y_pred=predictions_test_y)
         print(f"Hamming loss:{hamming_loss}\n")
+        result['BinaryRelevance'] = hamming_loss
 
         print("Using ClassifierChain now:\n")
         rf_hyperparameters = {'classifier__max_depth': [5], 'classifier__max_features': [6]}
@@ -295,6 +311,12 @@ def perform_supervised_modeling(questions):
         predictions_test_y = grid_search_cv.best_estimator_.predict(x_test)
         hamming_loss = metrics.hamming_loss(y_true=y_test, y_pred=predictions_test_y)
         print(f"Hamming loss:{hamming_loss}\n")
+        result['ClassifierChain'] = hamming_loss
+
+        results.append(result)
+
+    print("Results:\n")
+    pprint(results)
 
 
 if __name__ == '__main__':

@@ -45,7 +45,7 @@ lemmatizer = WordNetLemmatizer()
 
 
 def load_cached_questions():
-    with open('cached_questions.json', 'r', encoding='utf-8') as f:
+    with open('cached_questions_BAK.json', 'r', encoding='utf-8') as f:
         json_data = json.load(f)
         return json_data['items']
 
@@ -61,7 +61,7 @@ def cache_questions():
                            # tagged='python'
                            )
 
-    with open('cached_questions.json', 'w', encoding='utf-8') as f:
+    with open('cached_questions_BAK.json', 'w', encoding='utf-8') as f:
         json.dump(questions, f, ensure_ascii=False, indent=4)
 
 

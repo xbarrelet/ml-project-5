@@ -1,4 +1,3 @@
-import json
 import warnings
 from datetime import datetime
 from pprint import pprint
@@ -9,7 +8,7 @@ from stackapi import StackAPI
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-# STACKAPI CONFIGURATION
+# STACKAPI CONFIGURATION. No need for an API key here as we only want to fetch 50 results.
 SITE = StackAPI('stackoverflow')
 SITE.page_size = 50
 SITE.max_pages = 1
@@ -38,19 +37,18 @@ if __name__ == '__main__':
     json_questions_answer = fetch_questions()
     extracted_questions = json_questions_answer['items']
 
-    questions = [{
+    trimmed_questions = [{
         "body": question['body'],
-        "creation_date": question['creation_date'],
         "score": question['score'],
         "tags": question['tags'],
         "title": question['title']
     } for question in extracted_questions]
 
-    print(f"{len(questions)} questions received from API.\n")
+    print(f"{len(trimmed_questions)} questions received from API.\n")
 
-    df: DataFrame = DataFrame(questions)
+    df: DataFrame = DataFrame(trimmed_questions)
 
-    print("Displaying first line of dataframe:\n")
-    pprint(df.head(1))
+    print("Displaying first ten lines of dataframe:\n")
+    pprint(df.head(10))
 
     print("\nAPI script now done.")

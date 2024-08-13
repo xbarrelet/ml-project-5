@@ -3,8 +3,10 @@ import os
 import shutil
 import string
 import warnings
+from pprint import pprint
 
 import gensim
+import gensim.parsing.preprocessing as gsp
 import matplotlib.pyplot as plt
 import nltk
 import numpy as np
@@ -13,9 +15,8 @@ import pyLDAvis
 import pyLDAvis.gensim_models as gensimvis
 from gensim import corpora
 from gensim.models import CoherenceModel
-from nltk import WordNetLemmatizer
+from nltk import WordNetLemmatizer, PorterStemmer
 from tqdm import tqdm
-import gensim.parsing.preprocessing as gsp
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
@@ -24,6 +25,8 @@ plt.style.use("fivethirtyeight")
 pd.set_option('display.max_rows', None)
 pd.set_option('display.max_columns', None)
 
+# PATHS
+CACHED_QUESTIONS_FILE = 'cached_questions.json'
 RESULTS_PATH = 'unsupervised_results'
 
 # NLTK PACKAGES
@@ -32,16 +35,17 @@ RESULTS_PATH = 'unsupervised_results'
 # nltk.download('words')
 # nltk.download('wordnet')
 
+# NLTK OBJECTS
 stopwords = nltk.corpus.stopwords.words('english')
 words = set(nltk.corpus.words.words())
 lemmatizer = WordNetLemmatizer()
+stemmer = PorterStemmer()
 
 
 def load_cached_questions():
     """Load questions from the cache file."""
     with open('cached_questions.json', 'r', encoding='utf-8') as f:
-        json_data = json.load(f)
-        return json_data['items']
+        return json.load(f)
 
 
 def remove_last_generated_results():
@@ -62,19 +66,20 @@ def extract_and_clean_text(question: dict):
     # Words with low information amount such as the, a, an, etc.
     words_without_stopwords = [i for i in tokenized_text if i not in stopwords]
 
+    # TODO: Trop tard? Check manuellement via unit tests
     words_without_tags = (gsp.strip_tags(word) for word in words_without_stopwords)
     words_without_short_words = (gsp.strip_short(word) for word in words_without_tags)
 
-    # Keeping only the common part of verbs for example
+    # words_stemmed = (stemmer.stem(w) for w in words_without_short_words)
     words_lemmatized = (lemmatizer.lemmatize(w) for w in words_without_short_words)
     cleaned_text = ' '.join(w for w in words_lemmatized if w in words or not w.isalpha())
     question['text'] = cleaned_text
 
-    bigrams = nltk.bigrams(tokenized_text)
-    question['bigrams'] = [' '.join(bigram) for bigram in bigrams]
+    # bigrams = nltk.bigrams(tokenized_text)
+    # question['bigrams'] = [' '.join(bigram) for bigram in bigrams]
 
-    trigrams = nltk.trigrams(tokenized_text)
-    question['trigrams'] = [' '.join(trigram) for trigram in trigrams]
+    # trigrams = nltk.trigrams(tokenized_text)
+    # question['trigrams'] = [' '.join(trigram) for trigram in trigrams]
 
     return question
 
@@ -112,6 +117,8 @@ def train_lda_model(questions):
 
     visualize_lda_topics(corpus, id2word, lda_model, best_hyperparameters['num_topics'])
 
+    save_model(best_hyperparameters, lda_model)
+
     """    
     C_v measure is based on a sliding window, one-set segmentation of the top words and an indirect confirmation measure that uses normalized pointwise mutual information (NPMI) and the cosine similarity
     C_p is based on a sliding window, one-preceding segmentation of the top words and the confirmation measure of Fitelson’s coherence
@@ -124,10 +131,15 @@ def train_lda_model(questions):
     # TODO: Evaluate it: https://towardsdatascience.com/evaluate-topic-model-in-python-latent-dirichlet-allocation-lda-7d57484bb5d0
 
 
+def save_model(best_hyperparameters, lda_model):
+    os.makedirs('models', exist_ok=True)
+    lda_model.save(f"models/lda_model_with_{best_hyperparameters['num_topics']}_topics.model")
+
+
 def get_best_hyperparameters_of_lda_model(corpus, id2word, texts):
     topics_range = range(2, 12, 1)
 
-    alphas = list(np.arange(0.01, 1, 0.3))
+    alphas = list(np.arange(0.01, 2, 0.3))
     alphas.append('symmetric')
     alphas.append('asymmetric')
 
@@ -138,8 +150,8 @@ def get_best_hyperparameters_of_lda_model(corpus, id2word, texts):
     model_results = []
 
     # OVERRIDES for test
-    alphas = ['symmetric']
-    etas = [None]
+    # alphas = ['symmetric']
+    # etas = [None]
 
     pbar = tqdm(total=(len(etas) * len(alphas) * len(topics_range)))
     for num_topics in topics_range:
@@ -151,12 +163,16 @@ def get_best_hyperparameters_of_lda_model(corpus, id2word, texts):
                 pbar.update(1)
 
     pbar.close()
+
+    print("Results of the hyperparameters search:")
+    pprint(model_results)
+
     return max(model_results, key=lambda x: x['cv'])
 
 
 def visualize_lda_topics(corpus, id2word, lda_model, num_topics):
     LDAvis_prepared = gensimvis.prepare(lda_model, corpus, id2word)
-    pyLDAvis.save_html(LDAvis_prepared, f'results/lda_results_with_{num_topics}_topics.html')
+    pyLDAvis.save_html(LDAvis_prepared, f'{RESULTS_PATH}/lda_results_with_{num_topics}_topics.html')
 
 
 if __name__ == '__main__':
@@ -173,7 +189,9 @@ if __name__ == '__main__':
     print(f"{len(questions)} questions loaded from cache.\n")
 
     questions = list(map(extract_and_clean_text, questions))
+    print("Texts extracted and cleaned.\n")
 
     # There are several existing algorithms you can use to perform the topic modeling. The most common of it are:
-    # Latent Semantic Analysis (LSA/LSI), Probabilistic Latent Semantic Analysis (pLSA) and Latent Dirichlet Allocation (LDA)
+    # Latent Semantic Analysis (LSA/LSI),
+    # Probabilistic Latent Semantic Analysis (pLSA) and Latent Dirichlet Allocation (LDA)
     train_lda_model(questions)
