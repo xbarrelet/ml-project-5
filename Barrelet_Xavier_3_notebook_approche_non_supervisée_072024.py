@@ -25,6 +25,9 @@ plt.style.use("fivethirtyeight")
 pd.set_option('display.max_rows', None)
 pd.set_option('display.max_columns', None)
 
+# COHERENCE METRIC USED FOR HYPERPARAMETER OPTIMIZATION.
+COHERENCE_METRIC = "u_mass"
+
 # PATHS
 CACHED_QUESTIONS_FILE = 'cached_questions.json'
 RESULTS_PATH = 'unsupervised_results'
@@ -44,7 +47,7 @@ stemmer = PorterStemmer()
 
 def load_cached_questions():
     """Load questions from the cache file."""
-    with open('cached_questions.json', 'r', encoding='utf-8') as f:
+    with open(CACHED_QUESTIONS_FILE, 'r', encoding='utf-8') as f:
         return json.load(f)
 
 
@@ -66,12 +69,12 @@ def extract_and_clean_text(question: dict):
     # Words with low information amount such as the, a, an, etc.
     words_without_stopwords = [i for i in tokenized_text if i not in stopwords]
 
-    # TODO: Trop tard? Check manuellement via unit tests
     words_without_tags = (gsp.strip_tags(word) for word in words_without_stopwords)
     words_without_short_words = (gsp.strip_short(word) for word in words_without_tags)
+    words_without_whitespaces = (gsp.strip_multiple_whitespaces(word) for word in words_without_short_words)
 
     # words_stemmed = (stemmer.stem(w) for w in words_without_short_words)
-    words_lemmatized = (lemmatizer.lemmatize(w) for w in words_without_short_words)
+    words_lemmatized = (lemmatizer.lemmatize(w) for w in words_without_whitespaces)
     cleaned_text = ' '.join(w for w in words_lemmatized if w in words or not w.isalpha())
     question['text'] = cleaned_text
 
@@ -93,7 +96,7 @@ def compute_coherence_values_of_lda_model(corpus, id2word, texts, num_topics, al
                                            alpha=alpha,
                                            eta=eta)
 
-    coherence_model_lda = CoherenceModel(model=lda_model, texts=texts, dictionary=id2word, coherence='c_v')
+    coherence_model_lda = CoherenceModel(model=lda_model, texts=texts, dictionary=id2word, coherence=COHERENCE_METRIC)
 
     return coherence_model_lda.get_coherence()
 
@@ -119,24 +122,14 @@ def train_lda_model(questions):
 
     save_model(best_hyperparameters, lda_model)
 
-    """    
-    C_v measure is based on a sliding window, one-set segmentation of the top words and an indirect confirmation measure that uses normalized pointwise mutual information (NPMI) and the cosine similarity
-    C_p is based on a sliding window, one-preceding segmentation of the top words and the confirmation measure of Fitelson’s coherence
-    C_uci measure is based on a sliding window and the pointwise mutual information (PMI) of all word pairs of the given top words
-    C_umass is based on document cooccurrence counts, a one-preceding segmentation and a logarithmic conditional probability as confirmation measure
-    C_npmi is an enhanced version of the C_uci coherence using the normalized pointwise mutual information (NPMI)
-    C_a is baseed on a context window, a pairwise comparison of the top words and an indirect confirmation measure that uses normalized pointwise mutual information (NPMI) and the cosine similarity
-    """
-
-    # TODO: Evaluate it: https://towardsdatascience.com/evaluate-topic-model-in-python-latent-dirichlet-allocation-lda-7d57484bb5d0
-
 
 def save_model(best_hyperparameters, lda_model):
-    os.makedirs('models', exist_ok=True)
-    lda_model.save(f"models/lda_model_with_{best_hyperparameters['num_topics']}_topics.model")
+    os.makedirs('models/lda', exist_ok=True)
+    lda_model.save(f"models/lda/lda_model_with_{best_hyperparameters['num_topics']}_topics.model")
 
 
 def get_best_hyperparameters_of_lda_model(corpus, id2word, texts):
+    """Returns the best hyperparameters for the LDA model based on the coherence metric."""
     topics_range = range(2, 12, 1)
 
     alphas = list(np.arange(0.01, 2, 0.3))
@@ -191,7 +184,6 @@ if __name__ == '__main__':
     questions = list(map(extract_and_clean_text, questions))
     print("Texts extracted and cleaned.\n")
 
-    # There are several existing algorithms you can use to perform the topic modeling. The most common of it are:
-    # Latent Semantic Analysis (LSA/LSI),
-    # Probabilistic Latent Semantic Analysis (pLSA) and Latent Dirichlet Allocation (LDA)
     train_lda_model(questions)
+    
+    print("\nUnsupervised learning script finished.")
