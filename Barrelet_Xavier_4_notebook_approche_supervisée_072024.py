@@ -1,12 +1,12 @@
 import json
 import os
 import shutil
-import string
 import time
 import warnings
 from pprint import pprint
 
 import gensim.parsing.preprocessing as gsp
+import joblib
 import matplotlib.pyplot as plt
 import mlflow
 import nltk
@@ -18,12 +18,10 @@ from mlflow.models import infer_signature
 from nltk import WordNetLemmatizer, PorterStemmer
 from pandas import DataFrame
 from sklearn import metrics
-from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import make_scorer
 from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.multioutput import MultiOutputClassifier
 from sklearn.preprocessing import MultiLabelBinarizer
-from skmultilearn.problem_transform import BinaryRelevance, ClassifierChain
 from transformers import *
 from xgboost import XGBClassifier
 
@@ -39,14 +37,9 @@ CACHED_QUESTIONS_FILE = 'cached_questions_2500.json'
 RESULTS_PATH = 'supervised_results'
 
 # NLTK PACKAGES
-# nltk.download('stopwords')
-# nltk.download('punkt')
-# nltk.download('words')
-# nltk.download('wordnet')
+nltk.download('wordnet')
 
 # NLTK OBJECTS
-stopwords = nltk.corpus.stopwords.words('english')
-words = set(nltk.corpus.words.words())
 lemmatizer = WordNetLemmatizer()
 stemmer = PorterStemmer()
 
@@ -75,21 +68,20 @@ def extract_and_clean_text(question: dict):
     body = question['body']
     text = f"{title} {body}"
 
-    text_without_punctuation = "".join([i.lower() for i in text if i not in string.punctuation])
-    text_without_number = ''.join(i for i in text_without_punctuation if not i.isdigit())
+    for filter in [gsp.strip_tags,
+                   gsp.strip_punctuation,
+                   gsp.strip_multiple_whitespaces,
+                   gsp.strip_numeric,
+                   gsp.remove_stopwords,
+                   gsp.strip_short,
+                   gsp.lower_to_unicode]:
+        text = filter(text)
 
-    tokenized_text = nltk.tokenize.word_tokenize(text_without_number)
-    # Words with low information amount such as the, a, an, etc.
-    words_without_stopwords = [i for i in tokenized_text if i not in stopwords]
-
-    words_without_tags = (gsp.strip_tags(word) for word in words_without_stopwords)
-    words_without_short_words = (gsp.strip_short(word) for word in words_without_tags)
-    words_without_whitespaces = (gsp.strip_multiple_whitespaces(word) for word in words_without_short_words)
+    tokenized_text = nltk.tokenize.word_tokenize(text)
 
     # words_stemmed = (stemmer.stem(w) for w in words_without_short_words)
-    words_lemmatized = (lemmatizer.lemmatize(w) for w in words_without_whitespaces)
-    cleaned_text = ' '.join(w for w in words_lemmatized if w in words or not w.isalpha())
-    question['text'] = cleaned_text
+    words_lemmatized = [lemmatizer.lemmatize(w) for w in tokenized_text]
+    question['text'] = " ".join(words_lemmatized)
 
     # bigrams = nltk.bigrams(tokenized_text)
     # question['bigrams'] = [' '.join(bigram) for bigram in bigrams]
@@ -130,7 +122,10 @@ def bert_inp_fct(sentences, bert_tokenizer, max_length):
     return input_ids, token_type_ids, attention_mask, bert_inp_tot
 
 
-def feature_BERT_fct(model, model_type, sentences, max_length, b_size, mode='HF'):
+def transform_text_using_BERT(model, model_type, sentences, max_length, b_size):
+    # We don't want to use the cleaned text field with BERT, only title + " " + body
+    sentences = [f"{sentence[1]} {sentence[0]}" for sentence in sentences.iterrows()]
+
     batch_size = b_size
     batch_size_pred = b_size
     bert_tokenizer = AutoTokenizer.from_pretrained(model_type)
@@ -140,17 +135,8 @@ def feature_BERT_fct(model, model_type, sentences, max_length, b_size, mode='HF'
         idx = step * batch_size
         input_ids, token_type_ids, attention_mask, bert_inp_tot = bert_inp_fct(sentences[idx:idx + batch_size],
                                                                                bert_tokenizer, max_length)
-
-        if mode == 'HF':  # Bert HuggingFace
-            outputs = model.predict([input_ids, attention_mask, token_type_ids], batch_size=batch_size_pred)
-            last_hidden_states = outputs.last_hidden_state
-
-        if mode == 'TFhub':  # Bert Tensorflow Hub
-            text_preprocessed = {"input_word_ids": input_ids,
-                                 "input_mask": attention_mask,
-                                 "input_type_ids": token_type_ids}
-            outputs = model(text_preprocessed)
-            last_hidden_states = outputs['sequence_output']
+        outputs = model.predict([input_ids, attention_mask, token_type_ids], batch_size=batch_size_pred)
+        last_hidden_states = outputs.last_hidden_state
 
         if step == 0:
             last_hidden_states_tot = last_hidden_states
@@ -165,7 +151,10 @@ def feature_BERT_fct(model, model_type, sentences, max_length, b_size, mode='HF'
     return features_bert
 
 
-def feature_USE_fct(sentences, b_size):
+def transform_text_using_USE(sentences, b_size):
+    # We don't want to use the cleaned text field with USE, only title + " " + body
+    sentences = [f"{sentence[1]} {sentence[0]}" for sentence in sentences.iterrows()]
+
     batch_size = b_size
     time1 = time.time()
     us_encoder = hub.load("https://tfhub.dev/google/universal-sentence-encoder/4")
@@ -188,7 +177,7 @@ def transform_text(questions_without_tags, text_transformation_method):
     # TODO: You could add a Doc2Vec avec dm=1 et Word2Vec for comparison
 
     if text_transformation_method == "Doc2VEC":
-        return feature_Doc2VEC_fct(questions_without_tags)
+        return transform_text_using_Doc2VEC(questions_without_tags["text"])
 
     elif text_transformation_method == "BERT":
         max_length = 64
@@ -196,14 +185,14 @@ def transform_text(questions_without_tags, text_transformation_method):
         model_type = 'bert-base-uncased'
         model = TFAutoModel.from_pretrained(model_type)
 
-        return feature_BERT_fct(model, model_type, questions_without_tags, max_length, batch_size)
+        return transform_text_using_BERT(model, model_type, questions_without_tags, max_length, batch_size)
 
     elif text_transformation_method == "USE":
         batch_size = 10
-        return feature_USE_fct(questions_without_tags, batch_size)
+        return transform_text_using_USE(questions_without_tags, batch_size)
 
 
-def feature_Doc2VEC_fct(questions_without_tags):
+def transform_text_using_Doc2VEC(questions_without_tags):
     time1 = time.time()
     tagged_text = [TaggedDocument(words=text, tags=[str(index)])
                    for index, text in enumerate(questions_without_tags)]
@@ -213,7 +202,6 @@ def feature_Doc2VEC_fct(questions_without_tags):
     model.build_vocab(tagged_text)
     model.train(tagged_text, total_examples=model.corpus_count, epochs=model.epochs)
 
-    # model.save("d2v.model")
     embedded_text = [model.infer_vector(text.split(" ")) for text in questions_without_tags]
 
     time2 = np.round(time.time() - time1, 0)
@@ -221,41 +209,56 @@ def feature_Doc2VEC_fct(questions_without_tags):
     return embedded_text
 
 
+def create_results_plot(results):
+    performance_plot = results.plot(kind="bar", x="words_embedding_method", figsize=(15, 8), rot=0,
+                                    title="Models Performance Sorted by Hamming Loss")
+    performance_plot.legend([f"Hamming Loss", f"Jaccard Score"])
+    performance_plot.title.set_size(20)
+    performance_plot.set(xlabel=None)
+
+    performance_plot.get_figure().savefig(f"{RESULTS_PATH}/performance_plot.png", bbox_inches='tight')
+    plt.close()
+
+
 def perform_supervised_modeling(questions):
-    questions_df = DataFrame(questions)[['text', 'tags']]
+    questions_df = DataFrame(questions).head(100)
+    questions_df[["body", "title"]].head(5).to_csv("models/test.csv")
 
     tags = MultiLabelBinarizer().fit_transform(questions_df['tags'])
+    questions_df['tags'].to_json(f"models/tags.json")
+
     questions_without_tags = questions_df.drop(columns=['tags'], axis=1)
 
-    results = []
+    results_df = DataFrame(columns=["words_embedding_method", "hamming_loss", "jaccard_score"])
+    models = {}
     for words_embedding_method in [
         "Doc2VEC",
         "BERT",
         "USE"
     ]:
         print(f"Starting supervised learning with words embedding method:{words_embedding_method}.\n")
-        transformed_text = transform_text(questions_without_tags['text'], words_embedding_method)
+        transformed_text = transform_text(questions_without_tags, words_embedding_method)
 
         x_train, x_test, y_train, y_test = train_test_split(transformed_text, tags, test_size=0.2, random_state=42)
         print(f"training set size:{len(x_train)}, test set size:{len(x_test)}\n")
 
-        # http://scikit.ml/modelselection.html
-
-        result = {}
         default_model = XGBClassifier(n_estimators=100)
-        default_hyperparameters = {'estimator__max_depth': range(2, 12), 'estimator__n_estimators': range(50, 151, 50)}
+        default_hyperparameters = {'estimator__max_depth': [2]}
+        # default_hyperparameters = {'estimator__max_depth': range(2, 12),}
 
         grid_search_cv = GridSearchCV(MultiOutputClassifier(estimator=default_model), default_hyperparameters,
                                       cv=2,
                                       scoring=make_scorer(metrics.hamming_loss, greater_is_better=False),
                                       n_jobs=-1,
-                                      # return_train_score=True,
-                                      verbose=3
+                                      # verbose=3
                                       )
         grid_search_cv.fit(x_train, y_train)
 
         best_parameters = grid_search_cv.best_params_
         print(f"\nBest mean squared score:{grid_search_cv.best_score_} with params:{best_parameters}")
+
+        best_model = grid_search_cv.best_estimator_
+        models[words_embedding_method] = best_model
 
         predictions_test_y = grid_search_cv.best_estimator_.predict(x_test)
 
@@ -263,35 +266,46 @@ def perform_supervised_modeling(questions):
         jaccard_score = metrics.jaccard_score(y_true=y_test, y_pred=predictions_test_y, average='samples')
         print(f"Hamming loss:{hamming_loss}, jaccard_score:{jaccard_score}\n")
 
-        result[words_embedding_method] = {
-            "hamming_loss": hamming_loss,
-            "jaccard_score": jaccard_score
-        }
+        results_df.loc[len(results_df)] = [words_embedding_method, hamming_loss, jaccard_score]
 
-        with mlflow.start_run():
-            mlflow.log_params(default_hyperparameters)
+        send_results_to_mlflow(default_hyperparameters, best_model, hamming_loss, jaccard_score,
+                               words_embedding_method, x_train)
 
-            mlflow.log_metric("hamming_loss", hamming_loss)
-            mlflow.log_metric("jaccard_score", jaccard_score)
+    results_df.sort_values(f"hamming_loss", ascending=True, inplace=True)
+    create_results_plot(results_df)
 
-            mlflow.set_tag("Words embedding method", words_embedding_method)
+    save_best_model(models, results_df)
 
-            signature = infer_signature(x_train, grid_search_cv.best_estimator_.predict(x_train))
 
-            mlflow.sklearn.log_model(
-                sk_model=grid_search_cv.best_estimator_,
-                artifact_path="supervised-models",
-                signature=signature,
-                input_example=x_train,
-                registered_model_name="XGBoost",
-            )
 
-    print("Results:\n")
-    pprint(results)
+def save_best_model(models, results_df):
+    best_words_embedding_method = results_df.head(1)['words_embedding_method'].values[0]
+    joblib.dump(models[best_words_embedding_method], "models/best_supervised_model.model")
+
+
+def send_results_to_mlflow(default_hyperparameters, best_model, hamming_loss, jaccard_score, words_embedding_method,
+                           x_train):
+    with mlflow.start_run():
+        mlflow.log_params(default_hyperparameters)
+
+        mlflow.log_metric("hamming_loss", hamming_loss)
+        mlflow.log_metric("jaccard_score", jaccard_score)
+
+        mlflow.set_tag("Words embedding method", words_embedding_method)
+
+        signature = infer_signature(x_train, best_model.predict(x_train))
+
+        mlflow.sklearn.log_model(
+            sk_model=best_model,
+            artifact_path="supervised-models",
+            signature=signature,
+            input_example=x_train,
+            registered_model_name="XGBoost",
+        )
 
 
 if __name__ == '__main__':
-    print("Starting supervised learning script.\n")
+    print("Starting supervised learning script. Please make sure you have a local MLFlow server running.\n")
     remove_last_generated_results()
 
     json_questions = load_cached_questions()

@@ -1,7 +1,6 @@
 import json
 import os
 import shutil
-import string
 import warnings
 from pprint import pprint
 
@@ -33,14 +32,9 @@ CACHED_QUESTIONS_FILE = 'cached_questions.json'
 RESULTS_PATH = 'unsupervised_results'
 
 # NLTK PACKAGES
-# nltk.download('stopwords')
-# nltk.download('punkt')
-# nltk.download('words')
-# nltk.download('wordnet')
+nltk.download('wordnet')
 
 # NLTK OBJECTS
-stopwords = nltk.corpus.stopwords.words('english')
-words = set(nltk.corpus.words.words())
 lemmatizer = WordNetLemmatizer()
 stemmer = PorterStemmer()
 
@@ -62,21 +56,20 @@ def extract_and_clean_text(question: dict):
     body = question['body']
     text = f"{title} {body}"
 
-    text_without_punctuation = "".join([i.lower() for i in text if i not in string.punctuation])
-    text_without_number = ''.join(i for i in text_without_punctuation if not i.isdigit())
+    for filter in [gsp.strip_tags,
+                   gsp.strip_punctuation,
+                   gsp.strip_multiple_whitespaces,
+                   gsp.strip_numeric,
+                   gsp.remove_stopwords,
+                   gsp.strip_short,
+                   gsp.lower_to_unicode]:
+        text = filter(text)
 
-    tokenized_text = nltk.tokenize.word_tokenize(text_without_number)
-    # Words with low information amount such as the, a, an, etc.
-    words_without_stopwords = [i for i in tokenized_text if i not in stopwords]
-
-    words_without_tags = (gsp.strip_tags(word) for word in words_without_stopwords)
-    words_without_short_words = (gsp.strip_short(word) for word in words_without_tags)
-    words_without_whitespaces = (gsp.strip_multiple_whitespaces(word) for word in words_without_short_words)
+    tokenized_text = nltk.tokenize.word_tokenize(text)
 
     # words_stemmed = (stemmer.stem(w) for w in words_without_short_words)
-    words_lemmatized = (lemmatizer.lemmatize(w) for w in words_without_whitespaces)
-    cleaned_text = ' '.join(w for w in words_lemmatized if w in words or not w.isalpha())
-    question['text'] = cleaned_text
+    words_lemmatized = [lemmatizer.lemmatize(w) for w in tokenized_text]
+    question['text'] = " ".join(words_lemmatized)
 
     # bigrams = nltk.bigrams(tokenized_text)
     # question['bigrams'] = [' '.join(bigram) for bigram in bigrams]
@@ -114,7 +107,7 @@ def train_lda_model(questions):
     lda_model = gensim.models.LdaMulticore(corpus=corpus,
                                            id2word=id2word,
                                            num_topics=best_hyperparameters['num_topics'],
-                                           passes=10,
+                                           passes=5,
                                            alpha=best_hyperparameters['alpha'],
                                            eta=best_hyperparameters['eta'])
 

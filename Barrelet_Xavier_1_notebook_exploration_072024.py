@@ -1,7 +1,6 @@
 import json
 import os
 import shutil
-import string
 import warnings
 from collections import defaultdict
 from datetime import datetime
@@ -28,12 +27,12 @@ load_dotenv()
 # STACKAPI CONFIGURATION
 if os.getenv("SITE_API_KEY") is None:
     SITE = StackAPI('stackoverflow')
+    # 25 = limit with default of 100 results per page and no api key
+    SITE.max_pages = 25
 else:
     SITE = StackAPI('stackoverflow', key=os.getenv("SITE_API_KEY"))
-
-# Max and default value is 100
-# SITE.page_size = 100
-SITE.max_pages = 25
+    # To get 50k results
+    SITE.max_pages = 500
 
 # MISC CONFIGURATION
 plt.style.use("fivethirtyeight")
@@ -45,14 +44,9 @@ CACHED_QUESTIONS_FILE = 'cached_questions.json'
 RESULTS_PATH = 'analysis_results'
 
 # NLTK PACKAGES
-# nltk.download('stopwords')
-# nltk.download('punkt')
-# nltk.download('words')
-# nltk.download('wordnet')
+nltk.download('wordnet')
 
 # NLTK OBJECTS
-stopwords = nltk.corpus.stopwords.words('english')
-words = set(nltk.corpus.words.words())
 lemmatizer = WordNetLemmatizer()
 stemmer = PorterStemmer()
 
@@ -97,21 +91,20 @@ def extract_and_clean_text(question: dict):
     body = question['body']
     text = f"{title} {body}"
 
-    text_without_punctuation = "".join([i.lower() for i in text if i not in string.punctuation])
-    text_without_number = ''.join(i for i in text_without_punctuation if not i.isdigit())
+    for filter in [gsp.strip_tags,
+                   gsp.strip_punctuation,
+                   gsp.strip_multiple_whitespaces,
+                   gsp.strip_numeric,
+                   gsp.remove_stopwords,
+                   gsp.strip_short,
+                   gsp.lower_to_unicode]:
+        text = filter(text)
 
-    tokenized_text = nltk.tokenize.word_tokenize(text_without_number)
-    # Words with low information amount such as the, a, an, etc.
-    words_without_stopwords = [i for i in tokenized_text if i not in stopwords]
-
-    words_without_tags = (gsp.strip_tags(word) for word in words_without_stopwords)
-    words_without_short_words = (gsp.strip_short(word) for word in words_without_tags)
-    words_without_whitespaces = (gsp.strip_multiple_whitespaces(word) for word in words_without_short_words)
+    tokenized_text = nltk.tokenize.word_tokenize(text)
 
     # words_stemmed = (stemmer.stem(w) for w in words_without_short_words)
-    words_lemmatized = (lemmatizer.lemmatize(w) for w in words_without_whitespaces)
-    cleaned_text = ' '.join(w for w in words_lemmatized if w in words or not w.isalpha())
-    question['text'] = cleaned_text
+    words_lemmatized = [lemmatizer.lemmatize(w) for w in tokenized_text]
+    question['text'] = " ".join(words_lemmatized)
 
     # bigrams = nltk.bigrams(tokenized_text)
     # question['bigrams'] = [' '.join(bigram) for bigram in bigrams]
@@ -126,16 +119,27 @@ def visualize_word_clouds(questions):
     wordcloud = WordCloud(background_color="white", max_words=5000, contour_width=3,
                           contour_color='steelblue')
 
+    generate_words_wordcloud(questions, wordcloud)
+    generate_tags_wordcloud(questions, wordcloud)
+
+
+def generate_tags_wordcloud(questions, wordcloud):
+    unique_tags = set([tag for question in questions for tag in question['tags']])
+    joined_tags = ','.join(unique_tags)
+    print(f"{len(unique_tags)} unique tags were found in the dataset.\n")
+
+    cloud = wordcloud.generate(joined_tags)
+
+    cloud.to_file(f"{RESULTS_PATH}/tags_wordcloud.png")
+
+
+def generate_words_wordcloud(questions, wordcloud):
     texts = [question['text'] for question in questions]
     joined_texts = ','.join(texts)
-    cloud = wordcloud.generate(joined_texts)
-    cloud.to_file(f"{RESULTS_PATH}/words_wordcloud.png")
 
-    unique_tags = set([tag for question in questions for tag in question['tags']])
-    print(f"{len(unique_tags)} unique tags were found in the dataset.\n")
-    joined_tags = ','.join(unique_tags)
-    cloud = wordcloud.generate(joined_tags)
-    cloud.to_file(f"{RESULTS_PATH}/tags_wordcloud.png")
+    cloud = wordcloud.generate(joined_texts)
+
+    cloud.to_file(f"{RESULTS_PATH}/words_wordcloud.png")
 
 
 def display_most_used_tags(questions):
