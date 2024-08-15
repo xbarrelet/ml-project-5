@@ -44,7 +44,6 @@ def predict_text():
     text = transform_text(body, title)
 
     prediction = model.predict(text)
-    print(f"prediction:{prediction}.\n")
 
     tags = multi_label_binarizer.inverse_transform(prediction)
     print(f"prediction:{tags}")
