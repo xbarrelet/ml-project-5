@@ -52,11 +52,13 @@ stemmer = PorterStemmer()
 
 
 def load_cached_questions():
+    """Load questions from the cache file."""
     with open(CACHED_QUESTIONS_FILE, 'r', encoding='utf-8') as f:
         return json.load(f)
 
 
 def cache_questions():
+    """Download and cache the questions in a file."""
     # https://stackapi.readthedocs.io/en/latest/user/complex.html
     questions = SITE.fetch('questions',
                            fromdate=datetime(2010, 1, 1),
@@ -87,6 +89,7 @@ def remove_last_generated_results():
 
 
 def extract_and_clean_text(question: dict):
+    """Create a new 'text' field for each question containing the cleaned, tokenized and lemmatized title + body."""
     title = question['title']
     body = question['body']
     text = f"{title} {body}"
@@ -116,6 +119,7 @@ def extract_and_clean_text(question: dict):
 
 
 def visualize_word_clouds(questions):
+    """Visualize the word clouds of the tags and words of the body"""
     wordcloud = WordCloud(background_color="white", max_words=5000, contour_width=3,
                           contour_color='steelblue')
 
@@ -124,6 +128,7 @@ def visualize_word_clouds(questions):
 
 
 def generate_tags_wordcloud(questions, wordcloud):
+    """Visualize the word clouds of the tags"""
     unique_tags = set([tag for question in questions for tag in question['tags']])
     joined_tags = ','.join(unique_tags)
     print(f"{len(unique_tags)} unique tags were found in the dataset.\n")
@@ -134,6 +139,7 @@ def generate_tags_wordcloud(questions, wordcloud):
 
 
 def generate_words_wordcloud(questions, wordcloud):
+    """Visualize the word clouds of the tags and words of the bodies"""
     texts = [question['text'] for question in questions]
     joined_texts = ','.join(texts)
 
@@ -143,6 +149,7 @@ def generate_words_wordcloud(questions, wordcloud):
 
 
 def display_most_used_tags(questions):
+    """Display the 50 most used tags and their count"""
     top_50_df = get_most_used_tags(questions, 50)
 
     fig, axs = plt.subplots(1, 1)
@@ -156,6 +163,7 @@ def display_most_used_tags(questions):
 
 
 def get_most_used_tags(questions, count):
+    """Returns the {count} most used tags"""
     tags = defaultdict(int)
 
     for question in questions:
@@ -169,6 +177,7 @@ def get_most_used_tags(questions, count):
 
 
 def display_number_of_words_per_tag(questions):
+    """Display the number of unique and total words for the 50 most used tags"""
     words_per_tag = defaultdict(list)
 
     for question in questions:
@@ -191,6 +200,7 @@ def display_number_of_words_per_tag(questions):
 
 
 def generate_plot_with_words_per_tag(top_50_df):
+    """Generate the plot with the number of unique and total words per tag"""
     fig, axs = plt.subplots(1, 1)
     fig.set_size_inches(14, 14)
 
@@ -207,6 +217,7 @@ def generate_plot_with_words_per_tag(top_50_df):
 
 
 def display_length_of_body_and_title(questions):
+    """Display the distribution of the length of the bodies and titles"""
     df: DataFrame = pd.DataFrame(questions)
 
     df['body_length'] = df['body'].apply(lambda x: len(x))
@@ -235,6 +246,7 @@ def display_length_of_body_and_title(questions):
 
 
 def visualize_dimensionality_reductions(questions):
+    """Display the t-SNE visualizations of the texts linked to the five most used tags using TFIDF and CV"""
     five_most_used_tags = get_most_used_tags(questions, 5)['tag']
     all_texts = [question['text'] for question in questions]
 
@@ -262,6 +274,7 @@ def visualize_dimensionality_reductions(questions):
 
 
 def create_tsne_visualization_for_model(texts_df: DataFrame, model_type: str) -> None:
+    """Create the t-SNE visualization for the given model type"""
     plt.figure(figsize=(12, 10))
 
     ctf_plot = sns.scatterplot(texts_df,
@@ -279,8 +292,9 @@ def create_tsne_visualization_for_model(texts_df: DataFrame, model_type: str) ->
     plt.close()
 
 
-def get_tsne_results_with_model(texts_for_tag, tfidf_vectorizer_model):
-    ctf_transformed_text = tfidf_vectorizer_model.transform(texts_for_tag)
+def get_tsne_results_with_model(texts_for_tag, model):
+    """Get the t-SNE results for the given model"""
+    ctf_transformed_text = model.transform(texts_for_tag)
 
     tsne_ctf = TSNE(n_components=2, perplexity=30, max_iter=2000, init='random', learning_rate=200, random_state=42)
     return tsne_ctf.fit_transform(ctf_transformed_text)

@@ -19,6 +19,7 @@ pd.set_option('display.max_columns', None)
 
 
 def fetch_questions():
+    """Fetch 50 questions with at least 50 votes from the StackOverflow API."""
     # https://stackapi.readthedocs.io/en/latest/user/complex.html
     questions = SITE.fetch('questions',
                            fromdate=datetime(2020, 1, 1),

@@ -52,6 +52,7 @@ def remove_last_generated_results():
 
 
 def extract_and_clean_text(question: dict):
+    """Create a new 'text' field for each question containing the cleaned, tokenized and lemmatized title + body."""
     title = question['title']
     body = question['body']
     text = f"{title} {body}"
@@ -81,6 +82,7 @@ def extract_and_clean_text(question: dict):
 
 
 def compute_coherence_values_of_lda_model(corpus, id2word, texts, num_topics, alpha, eta):
+    """Train a model and compute its coherence value."""
     lda_model = gensim.models.LdaMulticore(corpus=corpus,
                                            id2word=id2word,
                                            num_topics=num_topics,
@@ -95,6 +97,7 @@ def compute_coherence_values_of_lda_model(corpus, id2word, texts, num_topics, al
 
 
 def train_lda_model(questions):
+    """Find the best hyperparameters for the LDA model and train it, visualizes the LDA topics and saves the model."""
     print("Starting the search of the best hyperparameters of the LDA model.\n")
     texts = [question['text'].split(" ") for question in questions]
 
@@ -119,8 +122,9 @@ def train_lda_model(questions):
 
 
 def save_model(best_hyperparameters, lda_model):
+    """Save the LDA model"""
     os.makedirs('models/unsupervised', exist_ok=True)
-    lda_model.save(f"models/lda/lda_model_with_{best_hyperparameters['num_topics']}_topics.model")
+    lda_model.save(f"models/unsupervised/lda_model_with_{best_hyperparameters['num_topics']}_topics.model")
 
 
 def get_best_hyperparameters_of_lda_model(corpus, id2word, texts):
@@ -159,8 +163,10 @@ def get_best_hyperparameters_of_lda_model(corpus, id2word, texts):
 
 
 def visualize_lda_topics(corpus, id2word, lda_model, num_topics):
+    """Visualize the topics of the LDA model."""
     LDAvis_prepared = gensimvis.prepare(lda_model, corpus, id2word)
     pyLDAvis.save_html(LDAvis_prepared, f'{RESULTS_PATH}/lda_results_with_{num_topics}_topics.html')
+    # pyLDAvis.display(LDAvis_prepared)
 
 
 if __name__ == '__main__':

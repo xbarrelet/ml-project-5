@@ -35,6 +35,7 @@ pd.set_option('display.max_columns', None)
 # PATHS
 CACHED_QUESTIONS_FILE = 'cached_questions_2500.json'
 RESULTS_PATH = 'supervised_results'
+MODELS_PATH = 'models/supervised'
 
 # NLTK PACKAGES
 nltk.download('wordnet')
@@ -60,10 +61,13 @@ def load_cached_questions():
 def remove_last_generated_results():
     """Removes the content of the saved plots."""
     shutil.rmtree(RESULTS_PATH, ignore_errors=True)
+    shutil.rmtree(MODELS_PATH, ignore_errors=True)
     os.mkdir(RESULTS_PATH)
+    os.makedirs(MODELS_PATH, exist_ok=True)
 
 
 def extract_and_clean_text(question: dict):
+    """Create a new 'text' field for each question containing the cleaned, tokenized and lemmatized title + body."""
     title = question['title']
     body = question['body']
     text = f"{title} {body}"
@@ -93,6 +97,7 @@ def extract_and_clean_text(question: dict):
 
 
 def bert_inp_fct(sentences, bert_tokenizer, max_length):
+    """Returns BERT variables for its prediction."""
     input_ids = []
     token_type_ids = []
     attention_mask = []
@@ -123,6 +128,7 @@ def bert_inp_fct(sentences, bert_tokenizer, max_length):
 
 
 def transform_text_using_BERT(model, model_type, sentences, max_length, b_size):
+    """Transform the text of the question's body and title into BERT embeddings."""
     # We don't want to use the cleaned text field with BERT, only title + " " + body
     sentences = [f"{sentence[1]} {sentence[0]}" for sentence in sentences.iterrows()]
 
@@ -152,6 +158,7 @@ def transform_text_using_BERT(model, model_type, sentences, max_length, b_size):
 
 
 def transform_text_using_USE(sentences, b_size):
+    """Transform the text of the question's body and title into USE embeddings."""
     # We don't want to use the cleaned text field with USE, only title + " " + body
     sentences = [f"{sentence[1]} {sentence[0]}" for sentence in sentences.iterrows()]
 
@@ -174,8 +181,7 @@ def transform_text_using_USE(sentences, b_size):
 
 
 def transform_text(questions_without_tags, text_transformation_method):
-    # TODO: You could add a Doc2Vec avec dm=1 et Word2Vec for comparison
-
+    """Transform the question text/body and title into words embeddings."""
     if text_transformation_method == "Doc2VEC":
         return transform_text_using_Doc2VEC(questions_without_tags["text"])
 
@@ -193,6 +199,7 @@ def transform_text(questions_without_tags, text_transformation_method):
 
 
 def transform_text_using_Doc2VEC(questions_without_tags):
+    """Transform the text of the question's body and title into Doc2VEC embeddings."""
     time1 = time.time()
     tagged_text = [TaggedDocument(words=text, tags=[str(index)])
                    for index, text in enumerate(questions_without_tags)]
@@ -210,6 +217,7 @@ def transform_text_using_Doc2VEC(questions_without_tags):
 
 
 def create_results_plot(results):
+    """Generate the plot showing the performance with each words embedding method."""
     performance_plot = results.plot(kind="bar", x="words_embedding_method", figsize=(15, 8), rot=0,
                                     title="Models Performance Sorted by Hamming Loss")
     performance_plot.legend([f"Hamming Loss", f"Jaccard Score"])
@@ -221,11 +229,11 @@ def create_results_plot(results):
 
 
 def perform_supervised_modeling(questions):
-    questions_df = DataFrame(questions).head(100)
-    questions_df[["body", "title"]].head(5).to_csv("models/test.csv")
+    """Find the best model using a GridSearchCV hyperoptimization for each words embedding method."""
+    questions_df = DataFrame(questions)
 
     tags = MultiLabelBinarizer().fit_transform(questions_df['tags'])
-    questions_df['tags'].to_json(f"models/tags.json")
+    questions_df['tags'].to_json(f"{MODELS_PATH}/tags.json")
 
     questions_without_tags = questions_df.drop(columns=['tags'], axis=1)
 
@@ -242,7 +250,7 @@ def perform_supervised_modeling(questions):
         x_train, x_test, y_train, y_test = train_test_split(transformed_text, tags, test_size=0.2, random_state=42)
         print(f"training set size:{len(x_train)}, test set size:{len(x_test)}\n")
 
-        default_model = XGBClassifier(n_estimators=100)
+        default_model = XGBClassifier(n_estimators=50)
         default_hyperparameters = {'estimator__max_depth': [2]}
         # default_hyperparameters = {'estimator__max_depth': range(2, 12),}
 
@@ -250,7 +258,7 @@ def perform_supervised_modeling(questions):
                                       cv=2,
                                       scoring=make_scorer(metrics.hamming_loss, greater_is_better=False),
                                       n_jobs=-1,
-                                      # verbose=3
+                                      verbose=3
                                       )
         grid_search_cv.fit(x_train, y_train)
 
@@ -279,12 +287,14 @@ def perform_supervised_modeling(questions):
 
 
 def save_best_model(models, results_df):
+    """Save the best model based on the hamming loss."""
     best_words_embedding_method = results_df.head(1)['words_embedding_method'].values[0]
-    joblib.dump(models[best_words_embedding_method], "models/best_supervised_model.model")
+    joblib.dump(models[best_words_embedding_method], f"{MODELS_PATH}/best_supervised_model.model")
 
 
 def send_results_to_mlflow(default_hyperparameters, best_model, hamming_loss, jaccard_score, words_embedding_method,
                            x_train):
+    """Send data to the MLFlow server."""
     with mlflow.start_run():
         mlflow.log_params(default_hyperparameters)
 
@@ -324,5 +334,3 @@ if __name__ == '__main__':
     perform_supervised_modeling(questions)
 
     print("\nSupervised learning now finished.\n")
-
-    # https://mlflow.org/docs/latest/getting-started/intro-quickstart/index.html
