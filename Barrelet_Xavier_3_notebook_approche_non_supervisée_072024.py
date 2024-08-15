@@ -156,9 +156,6 @@ def get_best_hyperparameters_of_lda_model(corpus, id2word, texts):
 
     pbar.close()
 
-    print("Results of the hyperparameters search:")
-    pprint(model_results)
-
     return max(model_results, key=lambda x: x['cv'])
 
 
