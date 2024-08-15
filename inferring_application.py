@@ -32,7 +32,7 @@ def transform_text(body, title):
 
 @app.route("/")
 def health_check():
-    return "Inferring service up!"
+    return "Inferring service up2!"
 
 
 @app.route("/predict", methods=['POST'])
