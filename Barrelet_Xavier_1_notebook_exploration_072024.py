@@ -45,6 +45,7 @@ RESULTS_PATH = 'analysis_results'
 
 # NLTK PACKAGES
 nltk.download('wordnet')
+nltk.download('punkt')
 
 # NLTK OBJECTS
 lemmatizer = WordNetLemmatizer()
