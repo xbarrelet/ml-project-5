@@ -10,7 +10,6 @@ def load_test_questions():
         return json.load(f)
 
 
-
 def test_extract_and_clean_text_removes_tags():
     # GIVEN
     test_question = {
