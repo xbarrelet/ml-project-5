@@ -35,7 +35,7 @@ pd.set_option('display.max_columns', None)
 # PATHS
 CACHED_QUESTIONS_FILE = 'cached_questions_2500.json'
 RESULTS_PATH = 'supervised_results'
-MODELS_PATH = 'models/supervised'
+MODELS_PATH = 'inferring_api/models'
 
 # NLTK PACKAGES
 nltk.download('wordnet')

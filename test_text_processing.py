@@ -1,13 +1,4 @@
-import json
-
 from Barrelet_Xavier_1_notebook_exploration_072024 import extract_and_clean_text
-
-TEST_CACHED_QUESTIONS_FILE = "cached_questions_100.json"
-
-
-def load_test_questions():
-    with open(TEST_CACHED_QUESTIONS_FILE, 'r', encoding='utf-8') as f:
-        return json.load(f)
 
 
 def test_extract_and_clean_text_removes_tags():

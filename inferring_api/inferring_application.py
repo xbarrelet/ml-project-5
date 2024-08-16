@@ -6,21 +6,24 @@ from flask import Flask, jsonify, request
 import tensorflow_hub as hub
 from sklearn.preprocessing import MultiLabelBinarizer
 
-# model = joblib.load('models/supervised/best_supervised_model.model')
-model = joblib.load('best_supervised_model.model')
+app = Flask(__name__)
+print("Flask app started.\n")
+
+
+# app.model = joblib.load('models/best_supervised_model.model')
+app.model = joblib.load('best_supervised_model.model')
 print("Model loaded from file.\n")
 
-# with open('models/supervised/tags.json') as json_data:
+
+# with open('models/tags.json') as json_data:
 with open('tags.json') as json_data:
     json_tags = json.load(json_data)
     tags_df = pd.Series(json_tags)
 print("Tags loaded from file.\n")
 
-multi_label_binarizer = MultiLabelBinarizer()
-multi_label_binarizer.fit(tags_df)
+app.multi_label_binarizer = MultiLabelBinarizer()
+app.multi_label_binarizer.fit(tags_df)
 
-app = Flask(__name__)
-print("Flask app started.\n")
 
 
 def transform_text(body, title):
@@ -43,9 +46,9 @@ def predict_text():
 
     text = transform_text(body, title)
 
-    prediction = model.predict(text)
+    prediction = app.model.predict(text)
 
-    tags = multi_label_binarizer.inverse_transform(prediction)
+    tags = app.multi_label_binarizer.inverse_transform(prediction)[0]
     print(f"prediction:{tags}")
 
     return jsonify({"predicted_tags": tags})
