@@ -2,7 +2,7 @@ import json
 
 import joblib
 import pandas as pd
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, current_app
 import tensorflow_hub as hub
 from sklearn.preprocessing import MultiLabelBinarizer
 
@@ -42,14 +42,14 @@ def health_check():
 def predict_text():
     body = request.json.get("body")
     title = request.json.get("title")
-    print(f"body:{body}, title:{title}")
+    current_app.logger.info(f"Payload received:\ntitle:{title},\nbody:{body}")
 
     text = transform_text(body, title)
 
     prediction = app.model.predict(text)
 
     tags = app.multi_label_binarizer.inverse_transform(prediction)[0]
-    print(f"prediction:{tags}")
+    current_app.logger.info(f"Tags predicted:{tags}")
 
     return jsonify({"predicted_tags": tags})
 
