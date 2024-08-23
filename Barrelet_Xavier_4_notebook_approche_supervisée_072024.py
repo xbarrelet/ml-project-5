@@ -3,7 +3,6 @@ import os
 import shutil
 import time
 import warnings
-from pprint import pprint
 
 import gensim.parsing.preprocessing as gsp
 import joblib
@@ -18,12 +17,13 @@ from mlflow.models import infer_signature
 from nltk import WordNetLemmatizer, PorterStemmer
 from pandas import DataFrame
 from sklearn import metrics
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import make_scorer
 from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.multioutput import MultiOutputClassifier
 from sklearn.preprocessing import MultiLabelBinarizer
 from transformers import *
-from xgboost import XGBClassifier
+from xgboost import XGBModel, XGBClassifier
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
@@ -32,10 +32,13 @@ plt.style.use("fivethirtyeight")
 pd.set_option('display.max_rows', None)
 pd.set_option('display.max_columns', None)
 
+# 15k crashes during hyperoptimization with doc2vec already. 20k crashes with no hyperoptimization and USE.
+NUMBER_OF_QUESTIONS_USED_IN_TRAINING = 10000
+
 # PATHS
-CACHED_QUESTIONS_FILE = 'cached_questions_2500.json'
+CACHED_QUESTIONS_FILE = 'cached_questions.json'
 RESULTS_PATH = 'supervised_results'
-MODELS_PATH = 'inferring_api/models'
+MODELS_PATH = 'models/supervised'
 
 # NLTK PACKAGES
 nltk.download('wordnet')
@@ -219,7 +222,7 @@ def transform_text_using_Doc2VEC(questions_without_tags):
 def create_results_plot(results):
     """Generate the plot showing the performance with each words embedding method."""
     performance_plot = results.plot(kind="bar", x="words_embedding_method", figsize=(15, 8), rot=0,
-                                    title="Models Performance Sorted by Hamming Loss")
+                                    title="Models Performance Sorted by Jaccard Score")
     performance_plot.legend([f"Hamming Loss", f"Jaccard Score"])
     performance_plot.title.set_size(20)
     performance_plot.set(xlabel=None)
@@ -230,7 +233,7 @@ def create_results_plot(results):
 
 def perform_supervised_modeling(questions):
     """Find the best model using a GridSearchCV hyperoptimization for each words embedding method."""
-    questions_df = DataFrame(questions)
+    questions_df = DataFrame(questions).head(NUMBER_OF_QUESTIONS_USED_IN_TRAINING)
 
     tags = MultiLabelBinarizer().fit_transform(questions_df['tags'])
     questions_df['tags'].to_json(f"{MODELS_PATH}/tags.json")
@@ -240,50 +243,56 @@ def perform_supervised_modeling(questions):
     results_df = DataFrame(columns=["words_embedding_method", "hamming_loss", "jaccard_score"])
     models = {}
     for words_embedding_method in [
-        "Doc2VEC",
-        "BERT",
+        # "Doc2VEC",
+        # "BERT",
         "USE"
     ]:
-        print(f"Starting supervised learning with words embedding method:{words_embedding_method}.\n")
+        print(f"Starting supervised learning of {NUMBER_OF_QUESTIONS_USED_IN_TRAINING} questions with words embedding method:{words_embedding_method}.\n")
         transformed_text = transform_text(questions_without_tags, words_embedding_method)
 
         x_train, x_test, y_train, y_test = train_test_split(transformed_text, tags, test_size=0.2, random_state=42)
         print(f"training set size:{len(x_train)}, test set size:{len(x_test)}\n")
 
-        default_model = XGBClassifier(n_estimators=50)
-        default_hyperparameters = {'estimator__max_depth': [2]}
-        # default_hyperparameters = {'estimator__max_depth': range(2, 12),}
+        # Best hyperparameters for 10k questions
+        # default_model = RandomForestClassifier(n_estimators=100, max_depth=9, max_features=5)
+        # default_hyperparameters = {'estimator__max_depth': range(2, 10), 'estimator__max_features': range(2, 6)}
+
+        default_model = XGBClassifier(n_estimators=100, max_depth=9)
+        default_hyperparameters = {'estimator__max_depth': range(2, 10)}
 
         grid_search_cv = GridSearchCV(MultiOutputClassifier(estimator=default_model), default_hyperparameters,
                                       cv=2,
-                                      scoring=make_scorer(metrics.hamming_loss, greater_is_better=False),
+                                      scoring=make_scorer(metrics.jaccard_score, average='samples'),
                                       n_jobs=-1,
                                       verbose=3
                                       )
         grid_search_cv.fit(x_train, y_train)
+        # default_model.fit(x_train, y_train)
 
         best_parameters = grid_search_cv.best_params_
         print(f"\nBest mean squared score:{grid_search_cv.best_score_} with params:{best_parameters}")
 
+        # best_model = default_model
         best_model = grid_search_cv.best_estimator_
         models[words_embedding_method] = best_model
 
-        predictions_test_y = grid_search_cv.best_estimator_.predict(x_test)
+        predictions_test_y = best_model.predict(x_test)
 
         hamming_loss = metrics.hamming_loss(y_true=y_test, y_pred=predictions_test_y)
         jaccard_score = metrics.jaccard_score(y_true=y_test, y_pred=predictions_test_y, average='samples')
         print(f"Hamming loss:{hamming_loss}, jaccard_score:{jaccard_score}\n")
 
+        joblib.dump(best_model, f"{MODELS_PATH}/best_supervised_model.model")
+
         results_df.loc[len(results_df)] = [words_embedding_method, hamming_loss, jaccard_score]
 
-        send_results_to_mlflow(default_hyperparameters, best_model, hamming_loss, jaccard_score,
-                               words_embedding_method, x_train)
+        # send_results_to_mlflow(default_hyperparameters, best_model, hamming_loss, jaccard_score,
+        #                        words_embedding_method, x_train)
 
-    results_df.sort_values(f"hamming_loss", ascending=True, inplace=True)
+    results_df.sort_values(f"jaccard_score", ascending=False, inplace=True)
     create_results_plot(results_df)
 
     save_best_model(models, results_df)
-
 
 
 def save_best_model(models, results_df):
@@ -310,7 +319,7 @@ def send_results_to_mlflow(default_hyperparameters, best_model, hamming_loss, ja
             artifact_path="supervised-models",
             signature=signature,
             input_example=x_train,
-            registered_model_name="XGBoost",
+            registered_model_name="RandomForestClassifier",
         )
 
 

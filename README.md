@@ -12,3 +12,4 @@ Fais un proper README.md pour ce projet.
 - Start local MLFlow server: 
 mlflow server --host 127.0.0.1 --port 8080
 
+MLOPS: https://ashutoshtripathi.com/2021/08/18/mlops-a-complete-guide-to-machine-learning-operations-mlops-vs-devops/
