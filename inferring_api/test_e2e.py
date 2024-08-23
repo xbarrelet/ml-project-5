@@ -2,8 +2,8 @@ import os
 
 import pytest
 
-from inferring_api.conftest import test_db_user, test_db_password, test_db_database, test_db_port
-from inferring_api.inferring_application import create_app
+from conftest import test_db_user, test_db_password, test_db_database, test_db_port
+from inferring_application import create_app
 
 os.environ["RDS_USERNAME"] = test_db_user
 os.environ["RDS_PASSWORD"] = test_db_password
