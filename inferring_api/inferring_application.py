@@ -8,6 +8,7 @@ import psycopg
 import requests
 import tensorflow_hub as hub
 from flask import Flask, jsonify, request, current_app
+from psycopg.rows import dict_row
 from sklearn.preprocessing import MultiLabelBinarizer
 
 DEFAULT_MODEL_URL = "https://inferring-api-models.s3.eu-west-3.amazonaws.com/best_supervised_model.model"
@@ -36,7 +37,7 @@ def start_label_binarizer(app):
 
 def init_db(app):
     connection_url = f'postgresql://{os.getenv("RDS_USERNAME")}:{os.getenv("RDS_PASSWORD")}@{os.getenv("RDS_HOSTNAME")}:{os.getenv("RDS_PORT")}/{os.getenv("RDS_DB_NAME")}'
-    app.db_connection = psycopg.connect(connection_url, autocommit=True)
+    app.db_connection = psycopg.connect(connection_url, autocommit=True, row_factory=dict_row)
 
     with app.db_connection.cursor() as cursor:
         cursor.execute(
@@ -73,24 +74,23 @@ def create_app():
         prediction = app.model.predict(text)
         tags = app.multi_label_binarizer.inverse_transform(prediction)[0]
 
-        with app.db_connection.cursor() as cursor:
-            cursor.execute("""INSERT INTO events (body, title, tags) VALUES (%s, %s, %s);""", (body, title, tags))
+        app.db_connection.execute("INSERT INTO events (body, title, tags) VALUES (%s, %s, %s);", (body, title, tags))
 
         current_app.logger.info(f"Predicted tags:{tags} for title:{title} and body:{body}.\n")
-
         return jsonify({"predicted_tags": tags})
+
 
     @app.route("/events")
     def get_events():
         with app.db_connection.cursor() as cursor:
-            cursor.execute("""SELECT * FROM events;""")
+            cursor.execute("SELECT * FROM events;")
             events = cursor.fetchall()
 
         return jsonify(events)
 
+
     app.logger.info("Flask webapp is up and running.\n")
     return app
-
 
 if __name__ == "__main__":
     app = create_app()
