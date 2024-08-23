@@ -26,7 +26,7 @@ jobs:
         python -m pip install --upgrade pip
         pip install nltk gensim matplotlib pandas seaborn python-dotenv wordcloud StackAPI scikit-learn pytest
         pip install -r inferring_api/inferring_application_requirements.txt
-        python -m nltk.downloader wordnet
+        python -m nltk.downloader wordnet punkt_tab
 
     - name: Running the unit test
       run: pytest test_text_processing.py
