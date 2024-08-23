@@ -4,6 +4,8 @@ on:
   push:
     paths:
       - inferring_api/**
+      - test_text_processing.py
+      - .github/workflows/pipeline.yml
 
 permissions:
   contents: read
