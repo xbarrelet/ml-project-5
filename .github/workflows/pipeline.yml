@@ -28,13 +28,15 @@ jobs:
         pip install -r inferring_api/inferring_application_requirements.txt
         python -m nltk.downloader wordnet punkt_tab
 
-    - name: Running the unit test
+    - name: Running the unit tests
       run: pytest test_text_processing.py
     - name: Running the e2e tests
       run: pytest inferring_api/test_e2e.py
 
     - name: Generate deployment package
       run: cd inferring_api && zip -r release.zip Dockerfile Dockerrun.aws.json inferring_application.py inferring_application_requirements.txt && mv release.zip ../
+
+      # The Beanstalk is not always up as it's expensive, this step will fail if it's missing.
     - name: Deploy to EB
       uses: einaregilsson/beanstalk-deploy@v21
       with:
