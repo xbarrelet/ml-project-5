@@ -1,8 +1,9 @@
-# To convert the script into Jupiter
-```p2j train.py```
-
-# To open Jupyterlab
-```jupyter lab```
+# Projet 5: Catégorisez automatiquement des questions
+Ce répositoire contient les fichiers nécessaires pour le projet 5 de la formation Machine Learning Engineer d'OpenClassrooms.  
+Il contient les dossiers suivants:
+- .github/workflows: le fichier yaml pour le workflow de CI/CD.
+- inferring_api: La webapp Flask qui permet d'inférer les catégories des questions posées.
+- notebooks: Les notebooks provenant des scripts du dossier racine.
 
 
 Fais un proper README.md pour ce projet.
