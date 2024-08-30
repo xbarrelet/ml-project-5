@@ -63,7 +63,7 @@ def cache_questions():
     # https://stackapi.readthedocs.io/en/latest/user/complex.html
     questions = SITE.fetch('questions',
                            fromdate=datetime(2010, 1, 1),
-                           todate=datetime(2024, 8, 11),
+                           todate=datetime(2023, 8, 11),
                            min=50,
                            sort='votes',
                            filter='withbody',
@@ -119,6 +119,16 @@ def extract_and_clean_text(question: dict):
     return question
 
 
+def generate_words_wordcloud_for_five_most_used_tags(top_5_tags, questions, wordcloud):
+    for tag in top_5_tags:
+        texts_for_tag = set([question['text'] for question in questions if tag in question['tags']])
+        joined_texts = ','.join(texts_for_tag)
+
+        cloud = wordcloud.generate(joined_texts)
+
+        cloud.to_file(f"{RESULTS_PATH}/{tag}_words_wordcloud.png")
+
+
 def visualize_word_clouds(questions):
     """Visualize the word clouds of the tags and words of the body"""
     wordcloud = WordCloud(background_color="white", max_words=5000, contour_width=3,
@@ -126,6 +136,9 @@ def visualize_word_clouds(questions):
 
     generate_words_wordcloud(questions, wordcloud)
     generate_tags_wordcloud(questions, wordcloud)
+
+    top_5_tags = get_most_used_tags(questions, 5)['tag'].values
+    generate_words_wordcloud_for_five_most_used_tags(top_5_tags, questions, wordcloud)
 
 
 def generate_tags_wordcloud(questions, wordcloud):

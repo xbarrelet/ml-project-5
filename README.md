@@ -1,6 +1,7 @@
 # Projet 5: Catégorisez automatiquement des questions
 Ce répositoire contient les fichiers nécessaires pour le projet 5 de la formation Machine Learning Engineer d'OpenClassrooms.  
-Plus d'information à son sujet résident sur la page: https://openclassrooms.com/fr/projects/1510
+Il se trouve à l'addresse suivante: https://github.com/xbarrelet/ml-project-5.  
+Plus d'information à son sujet résident sur la page: https://openclassrooms.com/fr/projects/1510.
 
 ## Structure
 Il contient les dossiers suivants:
