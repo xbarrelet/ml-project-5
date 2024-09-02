@@ -63,8 +63,8 @@ def cache_questions():
     # https://stackapi.readthedocs.io/en/latest/user/complex.html
     questions = SITE.fetch('questions',
                            fromdate=datetime(2010, 1, 1),
-                           todate=datetime(2023, 8, 11),
-                           min=50,
+                           todate=datetime(2022, 12, 31),
+                           min=100,
                            sort='votes',
                            filter='withbody',
                            # tagged='python'

@@ -17,7 +17,9 @@ from mlflow.models import infer_signature
 from nltk import WordNetLemmatizer, PorterStemmer
 from pandas import DataFrame
 from sklearn import metrics
-from sklearn.model_selection import train_test_split
+from sklearn.metrics import make_scorer
+from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.multioutput import MultiOutputClassifier
 from sklearn.preprocessing import MultiLabelBinarizer
 from transformers import *
 from xgboost import XGBClassifier
@@ -29,7 +31,7 @@ plt.style.use("fivethirtyeight")
 pd.set_option('display.max_rows', None)
 pd.set_option('display.max_columns', None)
 
-NUMBER_OF_QUESTIONS_USED_IN_TRAINING = 45000
+NUMBER_OF_QUESTIONS_USED_IN_TRAINING = 10000
 
 # PATHS
 CACHED_QUESTIONS_FILE = 'cached_questions.json'
@@ -153,7 +155,7 @@ def transform_text_using_BERT(model, model_type, sentences, max_length, b_size):
     time2 = np.round(time.time() - time1, 0)
     print(f"BERT processing time:{time2}s\n")
 
-    return features_bert
+    return features_bert, time2
 
 
 def transform_text_using_USE(sentences, b_size):
@@ -176,7 +178,7 @@ def transform_text_using_USE(sentences, b_size):
 
     time2 = np.round(time.time() - time1, 0)
     print(f"USE processing time:{time2}s\n")
-    return features
+    return features, time2
 
 
 def transform_text(questions_without_tags, text_transformation_method):
@@ -212,7 +214,7 @@ def transform_text_using_Doc2VEC(questions_without_tags):
 
     time2 = np.round(time.time() - time1, 0)
     print(f"Doc2VEC processing time:{time2}s\n")
-    return embedded_text
+    return embedded_text, time2
 
 
 def create_results_plot(results):
@@ -254,30 +256,35 @@ def perform_supervised_modeling(questions):
     ]:
         print(
             f"Starting supervised learning of {NUMBER_OF_QUESTIONS_USED_IN_TRAINING} questions with words embedding method:{words_embedding_method}.\n")
-        transformed_text = transform_text(questions_without_tags, words_embedding_method)
+        transformed_text, embedding_time = transform_text(questions_without_tags, words_embedding_method)
 
         x_train, x_test, y_train, y_test = train_test_split(transformed_text, tags, test_size=0.2, random_state=42)
         print(f"training set size:{len(x_train)}, test set size:{len(x_test)}\n")
 
         # XGBClassifier has a Jaccard Score 10x better than RandomForestClassifier,
         # Best hyperparameters for 10k questions
-        default_model = XGBClassifier(n_estimators=100, max_depth=2)
-        # default_hyperparameters = {'estimator__max_depth': range(2, 10)}
-        #
-        # grid_search_cv = GridSearchCV(MultiOutputClassifier(estimator=default_model), default_hyperparameters,
-        #                               cv=2,
-        #                               scoring=make_scorer(metrics.jaccard_score, average='samples'),
-        #                               n_jobs=-1,
-        #                               verbose=3
-        #                               )
-        # grid_search_cv.fit(x_train, y_train)
+        default_model = XGBClassifier(n_estimators=50, max_depth=2, device='cuda')
+        default_hyperparameters = {'estimator__n_estimators': [100, 300, 500]}
+        # default_hyperparameters = {'estimator__max_depth': range(2, 8)}
 
-        # best_parameters = grid_search_cv.best_params_
-        # print(f"\nBest Jaccard score:{grid_search_cv.best_score_} with params:{best_parameters}")
+        fit_start_time = time.time()
+        grid_search_cv = GridSearchCV(MultiOutputClassifier(estimator=default_model), default_hyperparameters,
+                                      cv=3,
+                                      scoring=make_scorer(metrics.jaccard_score, average='samples'),
+                                      n_jobs=1,
+                                      # n_jobs=-1,
+                                      verbose=3
+                                      )
+        grid_search_cv.fit(x_train, y_train)
+        fit_time = np.round(time.time() - fit_start_time, 0)
 
-        default_model.fit(x_train, y_train)
-        best_model = default_model
-        # best_model = grid_search_cv.best_estimator_
+        best_parameters = grid_search_cv.best_params_
+        print(f"\nBest Jaccard score:{grid_search_cv.best_score_} with params:{best_parameters}")
+
+        # default_model.fit(x_train, y_train)
+        # best_model = default_model
+
+        best_model = grid_search_cv.best_estimator_
         models[words_embedding_method] = best_model
 
         predictions_test_y = best_model.predict(x_test)
@@ -289,16 +296,14 @@ def perform_supervised_modeling(questions):
         # training set size:36000, test set size:9000, XGBClassifier
         # Hamming loss:0.0002497610080278267, jaccard_score:0.30443386243386245
 
-        joblib.dump(best_model, f"{MODELS_PATH}/best_supervised_model.model")
-
         results_df.loc[len(results_df)] = [words_embedding_method, hamming_loss, jaccard_score]
 
-        # send_results_to_mlflow(default_hyperparameters, best_model, hamming_loss, jaccard_score,
-        #                        words_embedding_method, x_train)
+        send_results_to_mlflow(default_hyperparameters, best_model, hamming_loss, jaccard_score,
+                               words_embedding_method, x_train, embedding_time, fit_time)
 
     create_results_plot(results_df)
 
-    save_best_model(models, results_df)
+    # save_best_model(models, results_df)
 
 
 def save_best_model(models, results_df):
@@ -308,13 +313,15 @@ def save_best_model(models, results_df):
 
 
 def send_results_to_mlflow(default_hyperparameters, best_model, hamming_loss, jaccard_score, words_embedding_method,
-                           x_train):
+                           x_train, embedding_time, fit_time):
     """Send data to the MLFlow server."""
     with mlflow.start_run():
         mlflow.log_params(default_hyperparameters)
 
         mlflow.log_metric("hamming_loss", hamming_loss)
         mlflow.log_metric("jaccard_score", jaccard_score)
+        mlflow.log_metric("embedding_time", embedding_time)
+        mlflow.log_metric("fitting_time", fit_time)
 
         mlflow.set_tag("Words embedding method", words_embedding_method)
 

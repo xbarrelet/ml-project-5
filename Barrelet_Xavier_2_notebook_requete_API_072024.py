@@ -22,9 +22,9 @@ def fetch_questions():
     """Fetch 50 questions with at least 50 votes from the StackOverflow API."""
     # https://stackapi.readthedocs.io/en/latest/user/complex.html
     questions = SITE.fetch('questions',
-                           fromdate=datetime(2020, 1, 1),
-                           todate=datetime(2024, 7, 30),
-                           min=50,
+                           fromdate=datetime(2010, 1, 1),
+                           todate=datetime(2022, 12, 31),
+                           min=100,
                            sort='votes',
                            filter='withbody',
                            # tagged='python'

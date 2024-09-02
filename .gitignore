@@ -174,7 +174,6 @@ resources/
 *.zip
 ml*/
 cached_question*
-*.docx
 
 # Elastic Beanstalk Files
 .elasticbeanstalk/*
@@ -182,4 +181,5 @@ cached_question*
 !.elasticbeanstalk/*.global.yml
 /models/
 
-*/models/
+*/models*/
+cached_questions*
