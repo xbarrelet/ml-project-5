@@ -104,7 +104,8 @@ def extract_and_clean_text(question: dict):
                    gsp.lower_to_unicode]:
         text = filter(text)
 
-    tokenized_text = nltk.tokenize.word_tokenize(text)
+    cleaned_text = text.replace("quot", "")
+    tokenized_text = nltk.tokenize.word_tokenize(cleaned_text)
 
     # words_stemmed = (stemmer.stem(w) for w in words_without_short_words)
     words_lemmatized = [lemmatizer.lemmatize(w) for w in tokenized_text]
@@ -121,7 +122,7 @@ def extract_and_clean_text(question: dict):
 
 def generate_words_wordcloud_for_five_most_used_tags(top_5_tags, questions, wordcloud):
     for tag in top_5_tags:
-        texts_for_tag = set([question['text'] for question in questions if tag in question['tags']])
+        texts_for_tag = [question['text'] for question in questions if tag in question['tags']]
         joined_texts = ','.join(texts_for_tag)
 
         cloud = wordcloud.generate(joined_texts)

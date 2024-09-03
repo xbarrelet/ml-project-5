@@ -66,7 +66,8 @@ def extract_and_clean_text(question: dict):
                    gsp.lower_to_unicode]:
         text = filter(text)
 
-    tokenized_text = nltk.tokenize.word_tokenize(text)
+    cleaned_text = text.replace("quot", "")
+    tokenized_text = nltk.tokenize.word_tokenize(cleaned_text)
 
     # words_stemmed = (stemmer.stem(w) for w in words_without_short_words)
     words_lemmatized = [lemmatizer.lemmatize(w) for w in tokenized_text]

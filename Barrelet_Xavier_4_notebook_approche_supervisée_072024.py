@@ -4,6 +4,7 @@ import shutil
 import time
 import warnings
 
+import cupy as cp
 import gensim.parsing.preprocessing as gsp
 import joblib
 import matplotlib.pyplot as plt
@@ -31,7 +32,7 @@ plt.style.use("fivethirtyeight")
 pd.set_option('display.max_rows', None)
 pd.set_option('display.max_columns', None)
 
-NUMBER_OF_QUESTIONS_USED_IN_TRAINING = 10000
+NUMBER_OF_QUESTIONS_USED_IN_TRAINING = 50000
 
 # PATHS
 CACHED_QUESTIONS_FILE = 'cached_questions.json'
@@ -82,7 +83,8 @@ def extract_and_clean_text(question: dict):
                    gsp.lower_to_unicode]:
         text = filter(text)
 
-    tokenized_text = nltk.tokenize.word_tokenize(text)
+    cleaned_text = text.replace("quot", "")
+    tokenized_text = nltk.tokenize.word_tokenize(cleaned_text)
 
     # words_stemmed = (stemmer.stem(w) for w in words_without_short_words)
     words_lemmatized = [lemmatizer.lemmatize(w) for w in tokenized_text]
@@ -217,24 +219,24 @@ def transform_text_using_Doc2VEC(questions_without_tags):
     return embedded_text, time2
 
 
-def create_results_plot(results):
+def create_results_plots(results):
     """Generate the plot showing the performances with each words embedding method for the Jaccard Score and Hamming Loss."""
-    results.sort_values(f"jaccard_score", ascending=False, inplace=True)
-    performance_plot = (results[["jaccard_score", "words_embedding_method"]]
-                        .plot(kind="bar", x="words_embedding_method", figsize=(15, 8), rot=0,
-                              title="Models Performance Sorted by Jaccard Score"))
-    performance_plot.title.set_size(20)
-    performance_plot.set(xlabel=None)
-    performance_plot.get_figure().savefig(f"{RESULTS_PATH}/performance_jaccard_score_plot.png", bbox_inches='tight')
-    plt.close()
+    create_results_plot(results, "jaccard_score", ascending=False)
+    create_results_plot(results, "hamming_loss")
+    create_results_plot(results, "embedding_time")
+    create_results_plot(results, "fit_time")
 
-    results.sort_values(f"hamming_loss", ascending=True, inplace=True)
-    performance_plot = (results[["hamming_loss", "words_embedding_method"]]
+
+def create_results_plot(results, metric, ascending=True):
+    results.sort_values(metric, ascending=ascending, inplace=True)
+
+    performance_plot = (results[[metric, "words_embedding_method"]]
                         .plot(kind="bar", x="words_embedding_method", figsize=(15, 8), rot=0,
-                              title="Models Performance Sorted by Hamming Loss"))
+                              title=f"Models Performance Sorted by {metric}"))
     performance_plot.title.set_size(20)
     performance_plot.set(xlabel=None)
-    performance_plot.get_figure().savefig(f"{RESULTS_PATH}/performance_hamming_loss_plot.png", bbox_inches='tight')
+
+    performance_plot.get_figure().savefig(f"{RESULTS_PATH}/performance_{metric}_plot.png", bbox_inches='tight')
     plt.close()
 
 
@@ -247,7 +249,8 @@ def perform_supervised_modeling(questions):
 
     questions_without_tags = questions_df.drop(columns=['tags'], axis=1)
 
-    results_df = DataFrame(columns=["words_embedding_method", "hamming_loss", "jaccard_score"])
+    results_df = DataFrame(columns=["words_embedding_method", "hamming_loss", "jaccard_score", "embedding_time",
+                                    "fit_time"])
     models = {}
     for words_embedding_method in [
         # "Doc2VEC",
@@ -263,45 +266,49 @@ def perform_supervised_modeling(questions):
 
         # XGBClassifier has a Jaccard Score 10x better than RandomForestClassifier,
         # Best hyperparameters for 10k questions
-        default_model = XGBClassifier(n_estimators=50, max_depth=2, device='cuda')
+        default_model = XGBClassifier(n_estimators=100, max_depth=2, device='cuda')
         default_hyperparameters = {'estimator__n_estimators': [100, 300, 500]}
         # default_hyperparameters = {'estimator__max_depth': range(2, 8)}
 
         fit_start_time = time.time()
-        grid_search_cv = GridSearchCV(MultiOutputClassifier(estimator=default_model), default_hyperparameters,
-                                      cv=3,
-                                      scoring=make_scorer(metrics.jaccard_score, average='samples'),
-                                      n_jobs=1,
+        # grid_search_cv = GridSearchCV(MultiOutputClassifier(estimator=default_model), default_hyperparameters,
+        #                               cv=3,
+        #                               scoring=make_scorer(metrics.jaccard_score, average='samples'),
+        #                               n_jobs=1,
                                       # n_jobs=-1,
-                                      verbose=3
-                                      )
-        grid_search_cv.fit(x_train, y_train)
+                                      # verbose=3
+                                      # )
+        # grid_search_cv.fit(cp.array(x_train), y_train)
+
+        # best_parameters = grid_search_cv.best_params_
+        # best_model = grid_search_cv.best_estimator_
+        # print(f"\nBest Jaccard score:{grid_search_cv.best_score_} with params:{best_parameters}")
+
+        default_model.fit(cp.array(x_train), y_train)
+
+        best_model = default_model
         fit_time = np.round(time.time() - fit_start_time, 0)
 
-        best_parameters = grid_search_cv.best_params_
-        print(f"\nBest Jaccard score:{grid_search_cv.best_score_} with params:{best_parameters}")
-
-        # default_model.fit(x_train, y_train)
-        # best_model = default_model
-
-        best_model = grid_search_cv.best_estimator_
         models[words_embedding_method] = best_model
 
-        predictions_test_y = best_model.predict(x_test)
+        predictions_test_y = best_model.predict(cp.array(x_test))
 
         hamming_loss = metrics.hamming_loss(y_true=y_test, y_pred=predictions_test_y)
         jaccard_score = metrics.jaccard_score(y_true=y_test, y_pred=predictions_test_y, average='samples')
         print(f"Hamming loss:{hamming_loss}, jaccard_score:{jaccard_score}\n")
 
+        joblib.dump(best_model, f"{MODELS_PATH}/best_supervised_model.model")
+
         # training set size:36000, test set size:9000, XGBClassifier
         # Hamming loss:0.0002497610080278267, jaccard_score:0.30443386243386245
 
-        results_df.loc[len(results_df)] = [words_embedding_method, hamming_loss, jaccard_score]
+        results_df.loc[len(results_df)] = [words_embedding_method, hamming_loss, jaccard_score, embedding_time,
+                                           fit_time]
 
-        send_results_to_mlflow(default_hyperparameters, best_model, hamming_loss, jaccard_score,
-                               words_embedding_method, x_train, embedding_time, fit_time)
+        # send_results_to_mlflow(default_hyperparameters, best_model, hamming_loss, jaccard_score,
+        #                        words_embedding_method, x_train, embedding_time, fit_time)
 
-    create_results_plot(results_df)
+    create_results_plots(results_df)
 
     # save_best_model(models, results_df)
 
