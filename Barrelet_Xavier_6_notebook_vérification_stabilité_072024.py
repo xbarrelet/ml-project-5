@@ -7,6 +7,7 @@ from os.path import exists
 
 import joblib
 import matplotlib.pyplot as plt
+import mlflow
 import numpy as np
 import pandas as pd
 import tensorflow_hub as hub
@@ -29,16 +30,21 @@ pd.set_option('display.max_columns', None)
 # PATHS
 CACHED_2023_QUESTIONS_FILE = 'cached_questions_2023.json'
 RESULTS_PATH = 'stability_results'
-MODEL_PATH = 'inferring_api/models_XGB_45k/best_supervised_model.model'
-TAGS_PATH = 'inferring_api/models_XGB_45k/tags.json'
+# MODEL_PATH = 'models/supervised/best_supervised_model.model'
+# TAGS_PATH = 'models/supervised/tags.json'
+MODEL_PATH = 'models/supervised_XGB_45k/best_supervised_model.model'
+TAGS_PATH = 'models/supervised_XGB_45k/tags.json'
 
 # USE ENCODER
 use_encoder = hub.load("https://tfhub.dev/google/universal-sentence-encoder/4")
 
+# MLFlow
+mlflow.set_tracking_uri(uri="http://localhost:8080")
+mlflow.set_experiment("Stability Verification Experiment")
+
 
 def cache_questions_from_2023():
     """Fetches the questions of a given month with at least 20 votes."""
-    # https://stackapi.readthedocs.io/en/latest/user/complex.html
     questions = SITE.fetch('questions',
                            fromdate=datetime(2023, 1, 1),
                            todate=datetime(2023, 12, 31),
@@ -115,10 +121,9 @@ def load_cached_2023_questions():
         return json.load(f)
 
 
-def start_label_binarizer():
-    json_tags = json.load(open(TAGS_PATH, 'r'))
-
+def start_label_binarizer(json_tags):
     tags_df = pd.Series(json_tags)
+
     multi_label_binarizer = MultiLabelBinarizer()
     multi_label_binarizer.fit(tags_df)
 
@@ -147,8 +152,6 @@ def create_results_plots(results):
     """Generate the plot showing the performances with each words embedding method for the Jaccard Score and Hamming Loss."""
     create_results_plot(results, "jaccard_score")
     create_results_plot(results, "hamming_loss")
-    create_results_plot(results, "accuracy_score")
-    create_results_plot(results, "f1_score")
 
 
 def create_results_plot(results, metric):
@@ -160,6 +163,30 @@ def create_results_plot(results, metric):
 
     performance_plot.get_figure().savefig(f"{RESULTS_PATH}/performance_{metric}_plot.png", bbox_inches='tight')
     plt.close()
+
+
+def send_scores_to_mlflow(last_result):
+    with mlflow.start_run():
+        mlflow.log_params({
+            "month": last_result['month']
+        })
+
+        mlflow.log_metric("hamming_loss", last_result['hamming_loss'])
+        mlflow.log_metric("jaccard_score", last_result['jaccard_score'])
+
+
+def get_accuracy_scores(questions):
+    y_test = label_binarizer.transform(questions['tags'])
+
+    questions_without_tags = questions.drop(columns=['tags'], axis=1)
+    x_test = transform_text_using_USE(questions_without_tags)
+
+    predictions_test_y = model.predict(x_test)
+
+    hamming_loss = metrics.hamming_loss(y_true=y_test, y_pred=predictions_test_y)
+    jaccard_score = metrics.jaccard_score(y_true=y_test, y_pred=predictions_test_y, average='samples',
+                                          zero_division=0)
+    return hamming_loss, jaccard_score
 
 
 if __name__ == '__main__':
@@ -174,8 +201,13 @@ if __name__ == '__main__':
     print(f"\nNumber of questions of 2023 with a minimum of 10 votes: {len(cached_questions_2023)}.\n")
     cached_questions_2023 = list(map(add_datetime_to_question, cached_questions_2023))
 
+    json_tags = json.load(open(TAGS_PATH, 'r'))
+    label_binarizer = start_label_binarizer(json_tags)
     model = joblib.load(MODEL_PATH)
-    label_binarizer = start_label_binarizer()
+
+    # unique_tags = set([tag for tags in json_tags.values() for tag in tags])
+    # cached_questions_2023 = [question for question in cached_questions_2023
+    #                          if all(tag in unique_tags for tag in question['tags'])]
 
     results = []
     for month in range(1, 13):
@@ -183,29 +215,17 @@ if __name__ == '__main__':
                                              if question['creation_datetime'].month == month])
         print(f"Starting month:{month} verification with {len(current_month_questions)} questions.")
 
-        y_test = label_binarizer.transform(current_month_questions['tags'])
-
-        questions_without_tags = current_month_questions.drop(columns=['tags'], axis=1)
-        x_test = transform_text_using_USE(questions_without_tags)
-
-        predictions_test_y = model.predict(x_test)
-
-        hamming_loss = metrics.hamming_loss(y_true=y_test, y_pred=predictions_test_y)
-        jaccard_score = metrics.jaccard_score(y_true=y_test, y_pred=predictions_test_y, average='samples',
-                                              zero_division=0)
-        accuracy_score = metrics.accuracy_score(y_true=y_test, y_pred=predictions_test_y)
-        f1_score = metrics.f1_score(y_true=y_test, y_pred=predictions_test_y, average='samples', zero_division=0)
+        hamming_loss, jaccard_score = get_accuracy_scores(current_month_questions)
 
         results.append({
             "month": month,
             "hamming_loss": hamming_loss,
-            "jaccard_score": jaccard_score,
-            "accuracy_score": accuracy_score,
-            "f1_score": f1_score
+            "jaccard_score": jaccard_score
         })
 
-        print(f"Results of month:{month} - Hamming loss:{hamming_loss}, jaccard_score:{jaccard_score}, "
-              f"accuracy_score:{accuracy_score}, f1_score:{f1_score}\n")
+        print(f"Results of month:{month} - Hamming loss:{hamming_loss}, jaccard_score:{jaccard_score}.\n")
+
+        # send_scores_to_mlflow(results[-1])
 
     create_results_plots(DataFrame(results))
 

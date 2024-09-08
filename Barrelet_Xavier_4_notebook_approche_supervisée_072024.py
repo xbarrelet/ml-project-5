@@ -1,10 +1,12 @@
 import json
+import multiprocessing
 import os
 import shutil
 import time
 import warnings
 
 import cupy as cp
+import gensim
 import gensim.parsing.preprocessing as gsp
 import joblib
 import matplotlib.pyplot as plt
@@ -13,15 +15,21 @@ import nltk
 import numpy as np
 import pandas as pd
 import tensorflow_hub as hub
+from gensim.models import Word2Vec
 from gensim.models.doc2vec import TaggedDocument, Doc2Vec
+from keras import Input, Model
+from keras.src.layers import Embedding, GlobalAveragePooling1D
+from keras.src.utils import pad_sequences
 from mlflow.models import infer_signature
 from nltk import WordNetLemmatizer, PorterStemmer
 from pandas import DataFrame
 from sklearn import metrics
+from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
 from sklearn.metrics import make_scorer
 from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.multioutput import MultiOutputClassifier
 from sklearn.preprocessing import MultiLabelBinarizer
+from tf_keras.src.preprocessing.text import Tokenizer
 from transformers import *
 from xgboost import XGBClassifier
 
@@ -32,7 +40,7 @@ plt.style.use("fivethirtyeight")
 pd.set_option('display.max_rows', None)
 pd.set_option('display.max_columns', None)
 
-NUMBER_OF_QUESTIONS_USED_IN_TRAINING = 50000
+NUMBER_OF_QUESTIONS_USED_IN_TRAINING = 1000
 
 # PATHS
 CACHED_QUESTIONS_FILE = 'cached_questions.json'
@@ -63,9 +71,9 @@ def load_cached_questions():
 def remove_last_generated_results():
     """Removes the content of the saved plots."""
     shutil.rmtree(RESULTS_PATH, ignore_errors=True)
-    shutil.rmtree(MODELS_PATH, ignore_errors=True)
     os.mkdir(RESULTS_PATH)
-    os.makedirs(MODELS_PATH, exist_ok=True)
+    # shutil.rmtree(MODELS_PATH, ignore_errors=True)
+    # os.makedirs(MODELS_PATH, exist_ok=True)
 
 
 def extract_and_clean_text(question: dict):
@@ -97,6 +105,111 @@ def extract_and_clean_text(question: dict):
     # question['trigrams'] = [' '.join(trigram) for trigram in trigrams]
 
     return question
+
+
+def transform_text_using_BagOfWords(questions_without_tags, is_count_vectorizer=False):
+    """Transform the text of the question's body and title into Word of bags embeddings."""
+    time1 = time.time()
+
+    model = CountVectorizer(stop_words='english', max_features=400) if is_count_vectorizer \
+        else TfidfVectorizer(stop_words='english', max_features=400)
+
+    embedded_text = model.fit_transform(questions_without_tags)
+
+    time2 = np.round(time.time() - time1, 0)
+    print(f"Word of bags processing time:{time2}s\n")
+    return embedded_text.todense(), time2
+
+
+def transform_text_using_Word2Vec(questions_without_tags):
+    """Transform the text of the question's body and title into Doc2VEC embeddings."""
+    time1 = time.time()
+
+    sentences = questions_without_tags
+    sentences = [gensim.utils.simple_preprocess(text) for text in sentences]
+
+    vector_size = 300
+    maxlen = max([len(sentence) for sentence in sentences])
+
+    w2v_model = train_w2v_model(sentences, vector_size)
+    model_vectors = w2v_model.wv
+    w2v_words = model_vectors.index_to_key
+
+    tokenizer = Tokenizer()
+    tokenizer.fit_on_texts(sentences)
+    x_sentences = pad_sequences(tokenizer.texts_to_sequences(sentences), maxlen=maxlen, padding='post')
+
+    word_index = tokenizer.word_index
+    vocab_size = len(word_index) + 1
+
+    embedding_matrix = create_word2vec_embedding_matrix(model_vectors, vector_size, vocab_size, w2v_words, word_index)
+    embedding_model = train_word2vec_embedding_model(embedding_matrix, maxlen, vector_size, vocab_size)
+
+    embedded_text = embedding_model.predict(x_sentences)
+
+    time2 = np.round(time.time() - time1, 0)
+    print(f"Doc2VEC processing time:{time2}s\n")
+    return embedded_text, time2
+
+
+def train_word2vec_embedding_model(embedding_matrix, maxlen, vector_size, vocab_size):
+    word_input = Input(shape=(maxlen,), dtype='float64')
+
+    word_embedding = Embedding(input_dim=vocab_size,
+                               output_dim=vector_size,
+                               weights=[embedding_matrix])(word_input)
+
+    word_vec = GlobalAveragePooling1D()(word_embedding)
+    embedding_model = Model([word_input], word_vec)
+
+    return embedding_model
+
+
+def create_word2vec_embedding_matrix(model_vectors, vector_size, vocab_size, w2v_words, word_index):
+    embedding_matrix = np.zeros((vocab_size, vector_size))
+
+    i = 0
+    j = 0
+    for word, idx in word_index.items():
+        i += 1
+        if word in w2v_words:
+            j += 1
+            embedding_vector = model_vectors[word]
+            if embedding_vector is not None:
+                embedding_matrix[idx] = model_vectors[word]
+
+    return embedding_matrix
+
+
+def train_w2v_model(sentences, vector_size):
+    w2v_model = gensim.models.Word2Vec(min_count=1, window=5,
+                                       vector_size=vector_size,
+                                       seed=42,
+                                       workers=multiprocessing.cpu_count())
+    w2v_model.build_vocab(sentences)
+    w2v_model.train(sentences, total_examples=w2v_model.corpus_count, epochs=100)
+
+    return w2v_model
+
+
+def transform_text_using_Doc2VEC(questions_without_tags):
+    """Transform the text of the question's body and title into Doc2VEC embeddings."""
+    time1 = time.time()
+
+    sentences = [gensim.utils.simple_preprocess(text) for text in questions_without_tags]
+    tagged_text = [TaggedDocument(words=text, tags=[str(index)]) for index, text in enumerate(sentences)]
+
+    # dm=0 for DBOW, dm=1 for PV-DM
+    model = Doc2Vec(vector_size=300, min_count=1, epochs=100, dm=0)
+    model.build_vocab(tagged_text)
+
+    model.train(tagged_text, total_examples=model.corpus_count, epochs=model.epochs)
+    embedded_text = [model.infer_vector(text) for text in sentences]
+
+    time2 = np.round(time.time() - time1, 0)
+    print(f"Doc2VEC processing time:{time2}s\n")
+
+    return embedded_text, time2
 
 
 def bert_inp_fct(sentences, bert_tokenizer, max_length):
@@ -185,7 +298,16 @@ def transform_text_using_USE(sentences, b_size):
 
 def transform_text(questions_without_tags, text_transformation_method):
     """Transform the question text/body and title into words embeddings."""
-    if text_transformation_method == "Doc2VEC":
+    if text_transformation_method == "CountVectorizer":
+        return transform_text_using_BagOfWords(questions_without_tags["text"], is_count_vectorizer=True)
+
+    elif text_transformation_method == "TfidfVectorizer":
+        return transform_text_using_BagOfWords(questions_without_tags["text"], is_count_vectorizer=False)
+
+    elif text_transformation_method == "Word2Vec":
+        return transform_text_using_Word2Vec(questions_without_tags["text"])
+
+    elif text_transformation_method == "Doc2Vec":
         return transform_text_using_Doc2VEC(questions_without_tags["text"])
 
     elif text_transformation_method == "BERT":
@@ -197,26 +319,8 @@ def transform_text(questions_without_tags, text_transformation_method):
         return transform_text_using_BERT(model, model_type, questions_without_tags, max_length, batch_size)
 
     elif text_transformation_method == "USE":
-        batch_size = 10
+        batch_size = 2
         return transform_text_using_USE(questions_without_tags, batch_size)
-
-
-def transform_text_using_Doc2VEC(questions_without_tags):
-    """Transform the text of the question's body and title into Doc2VEC embeddings."""
-    time1 = time.time()
-    tagged_text = [TaggedDocument(words=text, tags=[str(index)])
-                   for index, text in enumerate(questions_without_tags)]
-
-    # dm=0 for DBOW, dm=1 for PV-DM
-    model = Doc2Vec(vector_size=30, min_count=2, epochs=80, dm=0)
-    model.build_vocab(tagged_text)
-    model.train(tagged_text, total_examples=model.corpus_count, epochs=model.epochs)
-
-    embedded_text = [model.infer_vector(text.split(" ")) for text in questions_without_tags]
-
-    time2 = np.round(time.time() - time1, 0)
-    print(f"Doc2VEC processing time:{time2}s\n")
-    return embedded_text, time2
 
 
 def create_results_plots(results):
@@ -240,90 +344,17 @@ def create_results_plot(results, metric, ascending=True):
     plt.close()
 
 
-def perform_supervised_modeling(questions):
-    """Find the best model using a GridSearchCV hyperoptimization for each words embedding method."""
-    questions_df = DataFrame(questions).head(NUMBER_OF_QUESTIONS_USED_IN_TRAINING)
-
-    tags = MultiLabelBinarizer().fit_transform(questions_df['tags'])
-    questions_df['tags'].to_json(f"{MODELS_PATH}/tags.json")
-
-    questions_without_tags = questions_df.drop(columns=['tags'], axis=1)
-
-    results_df = DataFrame(columns=["words_embedding_method", "hamming_loss", "jaccard_score", "embedding_time",
-                                    "fit_time"])
-    models = {}
-    for words_embedding_method in [
-        # "Doc2VEC",
-        # "BERT",
-        "USE"
-    ]:
-        print(
-            f"Starting supervised learning of {NUMBER_OF_QUESTIONS_USED_IN_TRAINING} questions with words embedding method:{words_embedding_method}.\n")
-        transformed_text, embedding_time = transform_text(questions_without_tags, words_embedding_method)
-
-        x_train, x_test, y_train, y_test = train_test_split(transformed_text, tags, test_size=0.2, random_state=42)
-        print(f"training set size:{len(x_train)}, test set size:{len(x_test)}\n")
-
-        # XGBClassifier has a Jaccard Score 10x better than RandomForestClassifier,
-        # Best hyperparameters for 10k questions
-        default_model = XGBClassifier(n_estimators=100, max_depth=2, device='cuda')
-        default_hyperparameters = {'estimator__n_estimators': [100, 300, 500]}
-        # default_hyperparameters = {'estimator__max_depth': range(2, 8)}
-
-        fit_start_time = time.time()
-        # grid_search_cv = GridSearchCV(MultiOutputClassifier(estimator=default_model), default_hyperparameters,
-        #                               cv=3,
-        #                               scoring=make_scorer(metrics.jaccard_score, average='samples'),
-        #                               n_jobs=1,
-                                      # n_jobs=-1,
-                                      # verbose=3
-                                      # )
-        # grid_search_cv.fit(cp.array(x_train), y_train)
-
-        # best_parameters = grid_search_cv.best_params_
-        # best_model = grid_search_cv.best_estimator_
-        # print(f"\nBest Jaccard score:{grid_search_cv.best_score_} with params:{best_parameters}")
-
-        default_model.fit(cp.array(x_train), y_train)
-
-        best_model = default_model
-        fit_time = np.round(time.time() - fit_start_time, 0)
-
-        models[words_embedding_method] = best_model
-
-        predictions_test_y = best_model.predict(cp.array(x_test))
-
-        hamming_loss = metrics.hamming_loss(y_true=y_test, y_pred=predictions_test_y)
-        jaccard_score = metrics.jaccard_score(y_true=y_test, y_pred=predictions_test_y, average='samples')
-        print(f"Hamming loss:{hamming_loss}, jaccard_score:{jaccard_score}\n")
-
-        joblib.dump(best_model, f"{MODELS_PATH}/best_supervised_model.model")
-
-        # training set size:36000, test set size:9000, XGBClassifier
-        # Hamming loss:0.0002497610080278267, jaccard_score:0.30443386243386245
-
-        results_df.loc[len(results_df)] = [words_embedding_method, hamming_loss, jaccard_score, embedding_time,
-                                           fit_time]
-
-        # send_results_to_mlflow(default_hyperparameters, best_model, hamming_loss, jaccard_score,
-        #                        words_embedding_method, x_train, embedding_time, fit_time)
-
-    create_results_plots(results_df)
-
-    # save_best_model(models, results_df)
-
-
 def save_best_model(models, results_df):
     """Save the best model based on the hamming loss."""
     best_words_embedding_method = results_df.head(1)['words_embedding_method'].values[0]
     joblib.dump(models[best_words_embedding_method], f"{MODELS_PATH}/best_supervised_model.model")
 
 
-def send_results_to_mlflow(default_hyperparameters, best_model, hamming_loss, jaccard_score, words_embedding_method,
+def send_results_to_mlflow(best_model, hamming_loss, jaccard_score, words_embedding_method,
                            x_train, embedding_time, fit_time):
     """Send data to the MLFlow server."""
     with mlflow.start_run():
-        mlflow.log_params(default_hyperparameters)
+        mlflow.log_params({"words_embedding_method": words_embedding_method})
 
         mlflow.log_metric("hamming_loss", hamming_loss)
         mlflow.log_metric("jaccard_score", jaccard_score)
@@ -339,8 +370,89 @@ def send_results_to_mlflow(default_hyperparameters, best_model, hamming_loss, ja
             artifact_path="supervised-models",
             signature=signature,
             input_example=x_train,
-            registered_model_name="RandomForestClassifier",
+            registered_model_name="XGBoostClassifier",
         )
+
+
+def perform_supervised_modeling(questions):
+    """Find the best model using a GridSearchCV hyperoptimization for each words embedding method."""
+    questions_df = DataFrame(questions)
+
+    tags = MultiLabelBinarizer().fit_transform(questions_df['tags'])
+    questions_df['tags'].to_json(f"{MODELS_PATH}/tags.json")
+
+    questions_without_tags = questions_df.drop(columns=['tags'], axis=1)
+
+    results_df = DataFrame(columns=["words_embedding_method", "hamming_loss", "jaccard_score", "embedding_time",
+                                    "fit_time"])
+    models = {}
+    for words_embedding_method in [
+        # "CountVectorizer",
+        # "TfidfVectorizer",
+        "Word2Vec",
+        "Doc2Vec",
+        # "BERT",
+        # "USE"
+    ]:
+        print(f"Starting supervised learning of {NUMBER_OF_QUESTIONS_USED_IN_TRAINING} questions with words "
+              f"embedding method:{words_embedding_method}.\n")
+
+        transformed_text, embedding_time = transform_text(questions_without_tags, words_embedding_method)
+
+        x_train, x_test, y_train, y_test = train_test_split(transformed_text, tags, test_size=0.2, random_state=42)
+        print(f"training set size:{len(x_train)}, test set size:{len(x_test)}\n")
+
+        if words_embedding_method not in ("BERT", "USE"):
+            device = "cpu"
+            nb_jobs = -1
+        else:
+            device = "cuda"
+            nb_jobs = 1  # With cuda it's best to not parallelize jobs or -> cudaErrorMemoryAllocation
+            x_train = cp.array(x_train)
+            x_test = cp.array(x_test)
+
+        # Best hyperparameters for 10k questions
+        default_model = XGBClassifier(n_estimators=100, max_depth=2, device=device)
+        default_hyperparameters = {'estimator__max_depth': range(2, 8)}
+
+        fit_start_time = time.time()
+        grid_search_cv = GridSearchCV(MultiOutputClassifier(estimator=default_model),
+                                      default_hyperparameters,
+                                      cv=2,
+                                      scoring=make_scorer(metrics.jaccard_score, average='samples'),
+                                      n_jobs=nb_jobs,
+                                      verbose=3
+                                      )
+
+        grid_search_cv.fit(x_train, y_train)
+        best_parameters = grid_search_cv.best_params_
+        best_model = grid_search_cv.best_estimator_
+        print(f"\nBest Jaccard score:{grid_search_cv.best_score_} with params:{best_parameters}")
+
+        # default_model.fit(x_train, y_train)
+        # best_model = default_model
+
+        fit_time = np.round(time.time() - fit_start_time, 0)
+
+        models[words_embedding_method] = best_model
+
+        predictions_test_y = best_model.predict(x_test)
+
+        hamming_loss = metrics.hamming_loss(y_true=y_test, y_pred=predictions_test_y)
+        jaccard_score = metrics.jaccard_score(y_true=y_test, y_pred=predictions_test_y, average='samples')
+        print(f"Hamming loss:{hamming_loss}, jaccard_score:{jaccard_score}\n")
+
+        # training set size:36000, test set size:9000, XGBClassifier
+        # Hamming loss:0.0002497610080278267, jaccard_score:0.30443386243386245
+
+        results_df.loc[len(results_df)] = [words_embedding_method, hamming_loss, jaccard_score, embedding_time,
+                                           fit_time]
+
+        # send_results_to_mlflow(best_model, hamming_loss, jaccard_score,
+        #                        words_embedding_method, x_train, embedding_time, fit_time)
+
+    create_results_plots(results_df)
+    # save_best_model(models, results_df)
 
 
 if __name__ == '__main__':
@@ -353,7 +465,7 @@ if __name__ == '__main__':
         "body": question['body'],
         "tags": question['tags'],
         "title": question['title']
-    } for question in json_questions]
+    } for question in json_questions][:NUMBER_OF_QUESTIONS_USED_IN_TRAINING]
 
     print(f"{len(questions)} questions loaded from cache.\n")
 

@@ -2,7 +2,6 @@ import json
 import os
 import shutil
 import warnings
-from pprint import pprint
 
 import gensim
 import gensim.parsing.preprocessing as gsp
@@ -15,6 +14,7 @@ import pyLDAvis.gensim_models as gensimvis
 from gensim import corpora
 from gensim.models import CoherenceModel
 from nltk import WordNetLemmatizer, PorterStemmer
+from pandas import DataFrame
 from tqdm import tqdm
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
@@ -30,6 +30,7 @@ COHERENCE_METRIC = "u_mass"
 # PATHS
 CACHED_QUESTIONS_FILE = 'cached_questions.json'
 RESULTS_PATH = 'unsupervised_results'
+MODELS_PATH = 'models/unsupervised'
 
 # NLTK PACKAGES
 nltk.download('wordnet')
@@ -48,7 +49,9 @@ def load_cached_questions():
 def remove_last_generated_results():
     """Removes the content of the saved plots."""
     shutil.rmtree(RESULTS_PATH, ignore_errors=True)
-    os.mkdir(RESULTS_PATH)
+    os.makedirs(RESULTS_PATH)
+    shutil.rmtree(MODELS_PATH, ignore_errors=True)
+    os.makedirs(MODELS_PATH)
 
 
 def extract_and_clean_text(question: dict):
@@ -69,7 +72,7 @@ def extract_and_clean_text(question: dict):
     cleaned_text = text.replace("quot", "")
     tokenized_text = nltk.tokenize.word_tokenize(cleaned_text)
 
-    # words_stemmed = (stemmer.stem(w) for w in words_without_short_words)
+    # words_stemmed = (stemmer.stem(w) for w in tokenized_text)
     words_lemmatized = [lemmatizer.lemmatize(w) for w in tokenized_text]
     question['text'] = " ".join(words_lemmatized)
 
@@ -97,7 +100,18 @@ def compute_coherence_values_of_lda_model(corpus, id2word, texts, num_topics, al
     return coherence_model_lda.get_coherence()
 
 
-def train_lda_model(questions):
+def create_coherence_metrics_plot(results):
+    performance_plot = (DataFrame(results)[["cv", "num_topics"]]
+                        .plot(kind="bar", x="num_topics", figsize=(15, 8), rot=0,
+                              title=f"Best coherence metrics per topics number"))
+    performance_plot.title.set_size(20)
+    performance_plot.set(xlabel=None)
+
+    performance_plot.get_figure().savefig(f"{RESULTS_PATH}/performance_plot.png", bbox_inches='tight')
+    plt.close()
+
+
+def train_lda_models(questions):
     """Find the best hyperparameters for the LDA model and train it, visualizes the LDA topics and saves the model."""
     print("Starting the search of the best hyperparameters of the LDA model.\n")
     texts = [question['text'].split(" ") for question in questions]
@@ -105,30 +119,33 @@ def train_lda_model(questions):
     id2word = corpora.Dictionary(texts)
     corpus = [id2word.doc2bow(text) for text in texts]
 
-    best_hyperparameters: dict = get_best_hyperparameters_of_lda_model(corpus, id2word, texts)
-    print(f"Best hyperparameters found:{best_hyperparameters}.\n")
+    model_results = get_results_of_hyperoptimisation(corpus, id2word, texts)
 
-    lda_model = gensim.models.LdaMulticore(corpus=corpus,
-                                           id2word=id2word,
-                                           num_topics=best_hyperparameters['num_topics'],
-                                           passes=5,
-                                           alpha=best_hyperparameters['alpha'],
-                                           eta=best_hyperparameters['eta'])
+    create_coherence_metrics_plot(model_results)
 
-    print("Visualizing the topics of the LDA model.\n")
-    visualize_lda_topics(corpus, id2word, lda_model, best_hyperparameters['num_topics'])
+    for num_topics in [result['num_topics'] for result in model_results]:
+        print(f"Displaying results for the number of topics:{num_topics}.\n")
 
-    print("Saving the LDA model.\n")
-    save_model(best_hyperparameters, lda_model)
+        results = [result for result in model_results if result['num_topics'] == num_topics][0]
+        print(f"Best hyperparameters found:{results}.\n")
+
+        lda_model = gensim.models.LdaMulticore(corpus=corpus,
+                                               id2word=id2word,
+                                               num_topics=num_topics,
+                                               passes=10,
+                                               alpha=results['alpha'],
+                                               eta=results['eta'])
+
+        visualize_lda_topics(corpus, id2word, lda_model, num_topics)
+        save_model(num_topics, lda_model)
 
 
-def save_model(best_hyperparameters, lda_model):
+def save_model(num_topics, lda_model):
     """Save the LDA model"""
-    os.makedirs('models/unsupervised', exist_ok=True)
-    lda_model.save(f"models/unsupervised/lda_model_with_{best_hyperparameters['num_topics']}_topics.model")
+    lda_model.save(f"{MODELS_PATH}/lda_model_with_{num_topics}_topics.model")
 
 
-def get_best_hyperparameters_of_lda_model(corpus, id2word, texts):
+def get_results_of_hyperoptimisation(corpus, id2word, texts):
     """Returns the best hyperparameters for the LDA model based on the coherence metric."""
     topics_range = range(2, 12, 1)
 
@@ -139,7 +156,6 @@ def get_best_hyperparameters_of_lda_model(corpus, id2word, texts):
     etas = list(np.arange(0.01, 1, 0.3))
     etas.append('symmetric')
     etas.append(None)
-
     model_results = []
 
     # OVERRIDES for test
@@ -157,7 +173,7 @@ def get_best_hyperparameters_of_lda_model(corpus, id2word, texts):
 
     pbar.close()
 
-    return max(model_results, key=lambda x: x['cv'])
+    return model_results
 
 
 def visualize_lda_topics(corpus, id2word, lda_model, num_topics):
@@ -183,6 +199,6 @@ if __name__ == '__main__':
     questions = list(map(extract_and_clean_text, questions))
     print("Texts extracted and cleaned.\n")
 
-    train_lda_model(questions)
+    train_lda_models(questions)
 
     print("\nUnsupervised learning script finished.")

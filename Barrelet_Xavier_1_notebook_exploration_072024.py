@@ -315,6 +315,16 @@ def get_tsne_results_with_model(texts_for_tag, model):
     return tsne_ctf.fit_transform(ctf_transformed_text)
 
 
+def count_tags_number_per_question():
+    tags_number = {}
+    for question in questions:
+        number_of_tags = len(question['tags'])
+        if number_of_tags in tags_number:
+            tags_number[number_of_tags] += 1
+        else:
+            tags_number[number_of_tags] = 1
+
+
 if __name__ == '__main__':
     print("Starting analysis script.\n")
     remove_last_generated_results()
@@ -332,6 +342,7 @@ if __name__ == '__main__':
     } for question in json_questions]
     print(f"{len(questions)} questions loaded from cache.\n")
 
+    # count_tags_number_per_question()
     # Too many false positives due to included code or technical words.
     # non_english_questions = [question for question in questions if langdetect.detect(question['body']) != 'en']
 
