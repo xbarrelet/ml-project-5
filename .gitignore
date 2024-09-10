@@ -173,7 +173,7 @@ resources/
 .~lock*
 *.zip
 ml*/
-cached_question*
+cached_question_*
 
 # Elastic Beanstalk Files
 .elasticbeanstalk/*
@@ -182,4 +182,7 @@ cached_question*
 /models/
 
 */models*/
-cached_questions*
+/.elasticbeanstalk/
+
+*.docx
+/lda_topics_visualisations/

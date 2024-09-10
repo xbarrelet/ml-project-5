@@ -7,7 +7,7 @@ Plus d'information à son sujet résident sur la page: https://openclassrooms.co
 Il contient les dossiers suivants:
 - .github/workflows: le fichier yaml pour le workflow de CI/CD.
 - inferring_api: La webapp Flask qui permet d'inférer les catégories des questions posées + sa configuration de container pour son déployement sur AWS + son interface cliente locale
-- notebooks: Les notebooks provenant des scripts du dossier racine.
+- scripts: Les scripts originaux utilisés pendant la majeure partie du développement.
 
 ## Divers
 - Pour récupérer plus de 2500 questions de Stackoverflow via requête API il va falloir d'abord créer une clé API sur ce site puis l'ajouter dans le fichier .env en tant que variable SITE_API_KEY. 

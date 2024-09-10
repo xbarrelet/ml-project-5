@@ -1,4 +1,4 @@
-from Barrelet_Xavier_1_notebook_exploration_072024 import extract_and_clean_text
+from scripts.Barrelet_Xavier_1_notebook_exploration_072024 import extract_and_clean_text
 
 
 def test_extract_and_clean_text_removes_tags():
