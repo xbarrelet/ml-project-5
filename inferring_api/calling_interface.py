@@ -18,3 +18,9 @@ demo = gr.Interface(
 )
 
 demo.launch()
+
+# For the demo
+test_payload = {
+    "title": "Does Python have a string &#39;contains&#39; substring method?",
+    "body": "<p>I'm looking for a <code>string.contains</code> or <code>string.indexof</code> method in Python.</p>\n\n<p>I want to do:</p>\n\n<pre><code>if not somestring.contains(\"blah\"):\n   continue\n</code></pre>\n"
+}

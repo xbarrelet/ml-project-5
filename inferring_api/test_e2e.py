@@ -13,7 +13,8 @@ os.environ["RDS_DB_NAME"] = test_db_database
 
 # This model has been trained on a low number of questions for a reduced size and thus the predictions won't be that accurate
 os.environ["MODEL_URL"] = "https://inferring-api-models.s3.eu-west-3.amazonaws.com/test/best_supervised_model.model"
-os.environ["TAGS_URL"] = "https://inferring-api-models.s3.eu-west-3.amazonaws.com/test/tags.json"
+os.environ["ML_BINARIZER_URL"] = "https://inferring-api-models.s3.eu-west-3.amazonaws.com/test/best_ml_binarizer.model"
+os.environ["EMBEDDER_URL"] = "https://inferring-api-models.s3.eu-west-3.amazonaws.com/test/embedder_model.model"
 
 
 @pytest.fixture
@@ -37,7 +38,7 @@ def test_prediction_and_events_logging(test_client):
         "title": "Does Python have a string &#39;contains&#39; substring method?",
         "body": "<p>I'm looking for a <code>string.contains</code> or <code>string.indexof</code> method in Python.</p>\n\n<p>I want to do:</p>\n\n<pre><code>if not somestring.contains(\"blah\"):\n   continue\n</code></pre>\n"
     }
-    expected_predicted_tags = ['python', 'string']
+    expected_predicted_tags = ['git', 'javascript', 'python']
 
     # WHEN
     prediction_response = test_client.post('/predict', json=test_payload)

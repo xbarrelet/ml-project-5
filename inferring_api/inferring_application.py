@@ -2,17 +2,22 @@ import logging
 import os
 from io import BytesIO
 
+import gensim.parsing.preprocessing as gsp
 import joblib
-import pandas as pd
+import nltk
 import psycopg
 import requests
-import tensorflow_hub as hub
 from flask import Flask, jsonify, request, current_app
+from nltk import WordNetLemmatizer
 from psycopg.rows import dict_row
-from sklearn.preprocessing import MultiLabelBinarizer
 
 DEFAULT_MODEL_URL = "https://inferring-api-models.s3.eu-west-3.amazonaws.com/best_supervised_model.model"
-DEFAULT_TAGS_URL = "https://inferring-api-models.s3.eu-west-3.amazonaws.com/tags.json"
+DEFAULT_ML_BINARIZER_URL = "https://inferring-api-models.s3.eu-west-3.amazonaws.com/best_ml_binarizer.model"
+DEFAULT_EMBEDDER_URL = "https://inferring-api-models.s3.eu-west-3.amazonaws.com/embedder_model.model"
+
+
+lemmatizer = WordNetLemmatizer()
+nltk.download('wordnet')
 
 
 def load_model(app):
@@ -22,17 +27,27 @@ def load_model(app):
     app.model = joblib.load(BytesIO(file))
 
     app.logger.info(f"Model loaded from url:{model_url}.\n")
+    print(f"Model loaded from url:{model_url}.\n")
 
 
-def start_label_binarizer(app):
-    tags_url_from_env_var = os.getenv("TAGS_URL", default=DEFAULT_TAGS_URL)
+def load_label_binarizer(app):
+    binarizer_url = os.getenv("ML_BINARIZER_URL", default=DEFAULT_ML_BINARIZER_URL)
 
-    json_tags = requests.get(tags_url_from_env_var).json()
-    app.logger.info(f"Tags loaded from url:{tags_url_from_env_var}.\n")
+    file = requests.get(binarizer_url).content
+    app.binarizer = joblib.load(BytesIO(file))
 
-    tags_df = pd.Series(json_tags)
-    app.multi_label_binarizer = MultiLabelBinarizer()
-    app.multi_label_binarizer.fit(tags_df)
+    app.logger.info(f"Multilabel binarizer loaded from url:{binarizer_url}.\n")
+    print(f"Multilabel binarizer loaded from url:{binarizer_url}.\n")
+
+
+def load_embedder(app):
+    embedder_url = os.getenv("EMBEDDER_URL", default=DEFAULT_EMBEDDER_URL)
+
+    file = requests.get(embedder_url).content
+    app.embedder = joblib.load(BytesIO(file))
+
+    app.logger.info(f"Words embedder loaded from url:{embedder_url}.\n")
+    print(f"Words embedder loaded from url:{embedder_url}.\n")
 
 
 def init_db(app):
@@ -43,6 +58,27 @@ def init_db(app):
         cursor.execute(
             """CREATE TABLE IF NOT EXISTS events (event_id SERIAL PRIMARY KEY, body TEXT, title TEXT, tags TEXT);""")
     app.logger.info("Db connection initialized, table events created.\n")
+    print("Db connection initialized, table events created.\n")
+
+
+def extract_and_clean_text(title: str, body: str):
+    """Create a new 'text' field for each question containing the cleaned, tokenized and lemmatized title + body."""
+    text = f"{title} {body}"
+
+    for filter in [gsp.strip_tags,
+                   gsp.strip_punctuation,
+                   gsp.strip_multiple_whitespaces,
+                   gsp.strip_numeric,
+                   gsp.remove_stopwords,
+                   gsp.strip_short,
+                   gsp.lower_to_unicode]:
+        text = filter(text)
+
+    cleaned_text = text.replace("quot", "")
+    tokenized_text = nltk.tokenize.word_tokenize(cleaned_text)
+
+    words_lemmatized = [lemmatizer.lemmatize(w) for w in tokenized_text]
+    return " ".join(words_lemmatized)
 
 
 def create_app():
@@ -50,15 +86,9 @@ def create_app():
     app.logger.setLevel(logging.INFO)
 
     load_model(app)
-    start_label_binarizer(app)
+    load_label_binarizer(app)
+    load_embedder(app)
     init_db(app)
-
-    app.us_encoder = hub.load("https://tfhub.dev/google/universal-sentence-encoder/4")
-    app.logger.info("Universal sentence encoder loaded.\n")
-
-    def transform_text(body, title):
-        sentence = [f"{body} {title}"]
-        return app.us_encoder(sentence)
 
     @app.route("/")
     def health_check():
@@ -69,16 +99,16 @@ def create_app():
         body = request.json.get("body")
         title = request.json.get("title")
 
-        text = transform_text(body, title)
+        text = extract_and_clean_text(title, body)
+        transformed_text = app.embedder.transform([text])
 
-        prediction = app.model.predict(text)
-        tags = app.multi_label_binarizer.inverse_transform(prediction)[0]
+        prediction = app.model.predict(transformed_text)
+        tags = app.binarizer.inverse_transform(prediction)[0]
 
         app.db_connection.execute("INSERT INTO events (body, title, tags) VALUES (%s, %s, %s);", (body, title, tags))
 
         current_app.logger.info(f"Predicted tags:{tags} for title:{title} and body:{body}.\n")
         return jsonify({"predicted_tags": tags})
-
 
     @app.route("/events")
     def get_events():
@@ -88,9 +118,9 @@ def create_app():
 
         return jsonify(events)
 
-
     app.logger.info("Flask webapp is up and running.\n")
     return app
+
 
 if __name__ == "__main__":
     app = create_app()

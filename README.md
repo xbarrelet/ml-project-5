@@ -9,6 +9,8 @@ Il contient les dossiers suivants:
 - inferring_api: La webapp Flask qui permet d'inférer les catégories des questions posées + sa configuration de container pour son déployement sur AWS + son interface cliente locale
 - scripts: Les scripts originaux utilisés pendant la majeure partie du développement.
 
+Les notebooks et documents pour ce projet se trouvent dans le dossier racine. Les questions pour les notebooks se trouvent déjà dans le dossier racine et répositoire git pour gagner du temps.
+
 ## Divers
 - Pour récupérer plus de 2500 questions de Stackoverflow via requête API il va falloir d'abord créer une clé API sur ce site puis l'ajouter dans le fichier .env en tant que variable SITE_API_KEY. 
 - Pour démarrer un serveur MLFlow local après avoir installé les dépendances du fichier requirements.txt il suffit de lancer la commande suivante dans l'environnement virtuel:

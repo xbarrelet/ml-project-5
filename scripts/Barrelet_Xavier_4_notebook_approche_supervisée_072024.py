@@ -40,12 +40,12 @@ plt.style.use("fivethirtyeight")
 pd.set_option('display.max_rows', None)
 pd.set_option('display.max_columns', None)
 
-NUMBER_OF_QUESTIONS_USED_IN_TRAINING = 1000
+NUMBER_OF_QUESTIONS_USED_IN_TRAINING = 100
 
 # PATHS
-CACHED_QUESTIONS_FILE = '../cached_questions.json'
-RESULTS_PATH = '../supervised_results'
-MODELS_PATH = '../models/supervised'
+CACHED_QUESTIONS_FILE = 'cached_questions.json'
+RESULTS_PATH = 'supervised_results'
+MODELS_PATH = 'models/supervised'
 
 # NLTK PACKAGES
 nltk.download('wordnet')
@@ -58,8 +58,8 @@ stemmer = PorterStemmer()
 os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 
 # MLFlow
-mlflow.set_tracking_uri(uri="http://localhost:8080")
-mlflow.set_experiment("Supervised Learning Experiment")
+# mlflow.set_tracking_uri(uri="http://localhost:8080")
+# mlflow.set_experiment("Supervised Learning Experiment")
 
 
 def load_cached_questions():
@@ -72,8 +72,8 @@ def remove_last_generated_results():
     """Removes the content of the saved plots."""
     shutil.rmtree(RESULTS_PATH, ignore_errors=True)
     os.mkdir(RESULTS_PATH)
-    # shutil.rmtree(MODELS_PATH, ignore_errors=True)
-    # os.makedirs(MODELS_PATH, exist_ok=True)
+    shutil.rmtree(MODELS_PATH, ignore_errors=True)
+    os.makedirs(MODELS_PATH, exist_ok=True)
 
 
 def extract_and_clean_text(question: dict):
@@ -115,6 +115,8 @@ def transform_text_using_BagOfWords(questions_without_tags, is_count_vectorizer=
         else TfidfVectorizer(stop_words='english', max_features=400)
 
     embedded_text = model.fit_transform(questions_without_tags)
+
+    joblib.dump(model, f"{MODELS_PATH}/embedder_model.model")
 
     time2 = np.round(time.time() - time1, 0)
     print(f"Word of bags processing time:{time2}s\n")
@@ -378,8 +380,10 @@ def perform_supervised_modeling(questions):
     """Find the best model using a GridSearchCV hyperoptimization for each words embedding method."""
     questions_df = DataFrame(questions)
 
-    tags = MultiLabelBinarizer().fit_transform(questions_df['tags'])
-    questions_df['tags'].to_json(f"{MODELS_PATH}/tags.json")
+    ml_binarizer = MultiLabelBinarizer()
+    tags = ml_binarizer.fit_transform(questions_df['tags'])
+    joblib.dump(ml_binarizer, f"{MODELS_PATH}/best_ml_binarizer.model")
+    # questions_df['tags'].to_json(f"{MODELS_PATH}/tags.json")
 
     questions_without_tags = questions_df.drop(columns=['tags'], axis=1)
 
@@ -387,10 +391,10 @@ def perform_supervised_modeling(questions):
                                     "fit_time"])
     models = {}
     for words_embedding_method in [
-        # "CountVectorizer",
+        "CountVectorizer",
         # "TfidfVectorizer",
-        "Word2Vec",
-        "Doc2Vec",
+        # "Word2Vec",
+        # "Doc2Vec",
         # "BERT",
         # "USE"
     ]:
@@ -402,35 +406,35 @@ def perform_supervised_modeling(questions):
         x_train, x_test, y_train, y_test = train_test_split(transformed_text, tags, test_size=0.2, random_state=42)
         print(f"training set size:{len(x_train)}, test set size:{len(x_test)}\n")
 
-        if words_embedding_method not in ("BERT", "USE"):
-            device = "cpu"
-            nb_jobs = -1
-        else:
-            device = "cuda"
-            nb_jobs = 1  # With cuda it's best to not parallelize jobs or -> cudaErrorMemoryAllocation
-            x_train = cp.array(x_train)
-            x_test = cp.array(x_test)
+        # if words_embedding_method not in ("BERT", "USE"):
+        #     device = "cpu"
+        #     nb_jobs = -1
+        # else:
+        device = "cuda"
+        nb_jobs = 1  # With cuda it's best to not parallelize jobs or -> cudaErrorMemoryAllocation
+        x_train = cp.array(x_train)
+        x_test = cp.array(x_test)
 
         # Best hyperparameters for 10k questions
-        default_model = XGBClassifier(n_estimators=100, max_depth=2, device=device)
+        default_model = XGBClassifier(n_estimators=100, max_depth=5, device=device)
         default_hyperparameters = {'estimator__max_depth': range(2, 8)}
 
         fit_start_time = time.time()
-        grid_search_cv = GridSearchCV(MultiOutputClassifier(estimator=default_model),
-                                      default_hyperparameters,
-                                      cv=2,
-                                      scoring=make_scorer(metrics.jaccard_score, average='samples'),
-                                      n_jobs=nb_jobs,
-                                      verbose=3
-                                      )
+        # grid_search_cv = GridSearchCV(MultiOutputClassifier(estimator=default_model),
+        #                               default_hyperparameters,
+        #                               cv=2,
+        #                               scoring=make_scorer(metrics.jaccard_score, average='samples'),
+        #                               n_jobs=nb_jobs,
+        #                               verbose=3
+        #                               )
 
-        grid_search_cv.fit(x_train, y_train)
-        best_parameters = grid_search_cv.best_params_
-        best_model = grid_search_cv.best_estimator_
-        print(f"\nBest Jaccard score:{grid_search_cv.best_score_} with params:{best_parameters}")
+        # grid_search_cv.fit(x_train, y_train)
+        # best_parameters = grid_search_cv.best_params_
+        # best_model = grid_search_cv.best_estimator_
+        # print(f"\nBest Jaccard score:{grid_search_cv.best_score_} with params:{best_parameters}")
 
-        # default_model.fit(x_train, y_train)
-        # best_model = default_model
+        default_model.fit(x_train, y_train)
+        best_model = default_model
 
         fit_time = np.round(time.time() - fit_start_time, 0)
 
@@ -441,6 +445,8 @@ def perform_supervised_modeling(questions):
         hamming_loss = metrics.hamming_loss(y_true=y_test, y_pred=predictions_test_y)
         jaccard_score = metrics.jaccard_score(y_true=y_test, y_pred=predictions_test_y, average='samples')
         print(f"Hamming loss:{hamming_loss}, jaccard_score:{jaccard_score}\n")
+
+        joblib.dump(best_model, f"{MODELS_PATH}/best_supervised_model.model")
 
         # training set size:36000, test set size:9000, XGBClassifier
         # Hamming loss:0.0002497610080278267, jaccard_score:0.30443386243386245
