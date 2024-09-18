@@ -7,7 +7,7 @@ import joblib
 import nltk
 import psycopg
 import requests
-from flask import Flask, jsonify, request, current_app
+from flask import Flask, jsonify, request
 from nltk import WordNetLemmatizer
 from psycopg.rows import dict_row
 
@@ -15,9 +15,8 @@ DEFAULT_MODEL_URL = "https://inferring-api-models.s3.eu-west-3.amazonaws.com/bes
 DEFAULT_ML_BINARIZER_URL = "https://inferring-api-models.s3.eu-west-3.amazonaws.com/best_ml_binarizer.model"
 DEFAULT_EMBEDDER_URL = "https://inferring-api-models.s3.eu-west-3.amazonaws.com/embedder_model.model"
 
-
-lemmatizer = WordNetLemmatizer()
 nltk.download('wordnet')
+nltk.download('punkt')
 
 
 def load_model(app):
@@ -27,7 +26,6 @@ def load_model(app):
     app.model = joblib.load(BytesIO(file))
 
     app.logger.info(f"Model loaded from url:{model_url}.\n")
-    print(f"Model loaded from url:{model_url}.\n")
 
 
 def load_label_binarizer(app):
@@ -37,7 +35,6 @@ def load_label_binarizer(app):
     app.binarizer = joblib.load(BytesIO(file))
 
     app.logger.info(f"Multilabel binarizer loaded from url:{binarizer_url}.\n")
-    print(f"Multilabel binarizer loaded from url:{binarizer_url}.\n")
 
 
 def load_embedder(app):
@@ -47,7 +44,6 @@ def load_embedder(app):
     app.embedder = joblib.load(BytesIO(file))
 
     app.logger.info(f"Words embedder loaded from url:{embedder_url}.\n")
-    print(f"Words embedder loaded from url:{embedder_url}.\n")
 
 
 def init_db(app):
@@ -58,10 +54,9 @@ def init_db(app):
         cursor.execute(
             """CREATE TABLE IF NOT EXISTS events (event_id SERIAL PRIMARY KEY, body TEXT, title TEXT, tags TEXT);""")
     app.logger.info("Db connection initialized, table events created.\n")
-    print("Db connection initialized, table events created.\n")
 
 
-def extract_and_clean_text(title: str, body: str):
+def extract_and_clean_text(title: str, body: str, lemmatizer):
     """Create a new 'text' field for each question containing the cleaned, tokenized and lemmatized title + body."""
     text = f"{title} {body}"
 
@@ -90,6 +85,8 @@ def create_app():
     load_embedder(app)
     init_db(app)
 
+    lemmatizer = WordNetLemmatizer()
+
     @app.route("/")
     def health_check():
         return "Inferring service up!"
@@ -99,7 +96,7 @@ def create_app():
         body = request.json.get("body")
         title = request.json.get("title")
 
-        text = extract_and_clean_text(title, body)
+        text = extract_and_clean_text(title, body, lemmatizer)
         transformed_text = app.embedder.transform([text])
 
         prediction = app.model.predict(transformed_text)
@@ -107,7 +104,7 @@ def create_app():
 
         app.db_connection.execute("INSERT INTO events (body, title, tags) VALUES (%s, %s, %s);", (body, title, tags))
 
-        current_app.logger.info(f"Predicted tags:{tags} for title:{title} and body:{body}.\n")
+        app.logger.info(f"Predicted tags:{tags} for title:{title} and body:{body}.\n")
         return jsonify({"predicted_tags": tags})
 
     @app.route("/events")
@@ -121,6 +118,9 @@ def create_app():
     app.logger.info("Flask webapp is up and running.\n")
     return app
 
+
+def create_gunicorn_app(environ, start_response):
+    return create_app()
 
 if __name__ == "__main__":
     app = create_app()
